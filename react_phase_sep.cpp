@@ -417,6 +417,8 @@ void condensation(vector<double> &beta, const int sim_cond)
 
     char fname[64];
     
+    save_lattice(0.0);
+
     for (int j = 0; j < beta.size(); j++)
     {
         double b = beta[j];
