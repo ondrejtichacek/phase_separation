@@ -8,6 +8,14 @@
 
 using namespace std;
 
+#ifndef INTERACTION_WALK
+#define INTERACTION_WALK true
+#endif
+
+#ifndef WALK_CROSS
+#define WALK_CROSS true
+#endif
+
 #ifndef LATTICE_SIZE
 #define LATTICE_SIZE 100
 #endif
@@ -16,15 +24,18 @@ using namespace std;
 #define NUM_COMPONENTS 20
 #endif
 
-const int L = LATTICE_SIZE;  // size of the system: 2D square lattice  LxL periodic boundary conditions
-const int q = NUM_COMPONENTS;   // number of enzymes (length of the pathway)
-double volume_frac; // volume fraction of the solutes
-double interaction; // interaction between substrate and enzymes (uniform)
+const int L = LATTICE_SIZE;   // size of the system: 2D square lattice  LxL periodic boundary conditions
+const int q = NUM_COMPONENTS; // number of enzymes (length of the pathway)
 
 // global variables
 double I[q + 1][q + 1]; // interaction matrix
 double J[q + 1][q + 1]; // interaction matrix
-int spin[L][L];         // lattice variables
+
+int spin[L][L]; // lattice variables
+uint l_react[L][L][q];
+
+double volume_frac; // volume fraction of the solutes
+double interaction; // interaction between substrate and enzymes (uniform)
 
 double casual()
 { // a random number uniform in (0,1)
@@ -229,12 +240,19 @@ int time_to_react(const double F, const double interaction)
     it returns the total time to go through the pathway,
     F is the attraction energy of the substrate with the enzymes (uniform) */
     int counter = 0;
+    
     int pos[2];
+    int newpos[2];
+
     int tempo = 0;
+
     pos[0] = int(casual() * L);
     pos[1] = int(casual() * L);
+
     do
     {
+        l_react[pos[0]][pos[1]][counter] += 1;
+
         if (spin[pos[0]][pos[1]] == counter + 1)
         {
             counter++;
@@ -242,25 +260,43 @@ int time_to_react(const double F, const double interaction)
             //    counter++;
         }
 
-        double cas = casual();
-        int newpos[2];
-
         // random walk
-        if (cas < 0.5)
-            newpos[0] = pos[0] + 1;
-        else
-            newpos[0] = pos[0] - 1;
+        if (WALK_CROSS == true)
+        {
+            int s = 1;
+            if (casual() < 0.5)
+                s = -1;
 
+            if (casual() < 0.5)
+            {
+                newpos[0] = pos[0] + s;
+                newpos[1] = pos[1];
+            }
+            else
+            {
+                newpos[0] = pos[0];
+                newpos[1] = pos[1] + s;
+            }
+        }
+        else
+        {
+            if (casual() < 0.5)
+                newpos[0] = pos[0] + 1;
+            else
+                newpos[0] = pos[0] - 1;
+
+            if (casual() < 0.5)
+                newpos[1] = pos[1] + 1;
+            else
+                newpos[1] = pos[1] - 1;
+        }
+
+
+        // periodic boundary
         if (newpos[0] < 0)
             newpos[0] = L - 1;
         else if (newpos[0] >= L)
             newpos[0] = 0;
-
-        cas = casual();
-        if (cas < 0.5)
-            newpos[1] = pos[1] + 1;
-        else
-            newpos[1] = pos[1] - 1;
 
         if (newpos[1] < 0)
             newpos[1] = L - 1;
@@ -269,20 +305,7 @@ int time_to_react(const double F, const double interaction)
 
         int okkei = 1;
 
-        if (true)
-        {
-            // we go from K to 0, where K > 0
-            if (spin[newpos[0]][newpos[1]] == 0 && spin[pos[0]][pos[1]] > 0)
-            // if (spin[newpos[0]][newpos[1]] > 0 && spin[newpos[0]][newpos[1]] < counter + 1)
-            // if (spin[newpos[0]][newpos[1]] > 0 && spin[newpos[0]][newpos[1]] != counter + 1)
-            {
-                // decide whether to accept step
-                okkei = 0;
-                if (casual() < 1. / exp(F))
-                    okkei = 1;
-            }
-        }
-        else
+        if (INTERACTION_WALK == true)
         {
             okkei = 0;
 
@@ -303,6 +326,19 @@ int time_to_react(const double F, const double interaction)
                     okkei = 1;
             }
         }
+        else
+        {
+            // we go from K to 0, where K > 0
+            if (spin[newpos[0]][newpos[1]] == 0 && spin[pos[0]][pos[1]] > 0)
+            // if (spin[newpos[0]][newpos[1]] > 0 && spin[newpos[0]][newpos[1]] < counter + 1)
+            // if (spin[newpos[0]][newpos[1]] > 0 && spin[newpos[0]][newpos[1]] != counter + 1)
+            {
+                // decide whether to accept step
+                okkei = 0;
+                if (casual() < 1. / exp(F))
+                    okkei = 1;
+            }
+        }
 
         if (okkei == 1)
         {
@@ -319,7 +355,7 @@ int time_to_react(const double F, const double interaction)
 void load_lattice(const double beta)
 {
     char fname[64];
-    sprintf(fname, "lattice_%.1f.csv", beta);
+    sprintf(fname, "lattice_%.3f.csv", beta);
 
     ifstream infile(fname);
 
@@ -335,7 +371,7 @@ void load_lattice(const double beta)
 void save_lattice(const double beta)
 {
     char fname[64];
-    sprintf(fname, "lattice_%.1f.csv", beta);
+    sprintf(fname, "lattice_%.3f.csv", beta);
 
     ofstream fout;
     fout.open(fname);
@@ -349,6 +385,28 @@ void save_lattice(const double beta)
         fout << endl;
     }
     fout.close();
+}
+
+void save_l_react(const double beta)
+{
+    for (int k = 0; k < q; k++)
+    {
+        char fname[64];
+        sprintf(fname, "l_react_%.3f_%d.csv", beta, k);
+
+        ofstream fout;
+        fout.open(fname);
+
+        for (int i = 0; i < L; i++)
+        {
+            for (int j = 0; j < L; j++)
+            {
+                fout << l_react[i][j][k] << " ";
+            }
+            fout << endl;
+        }
+        fout.close();
+    }
 }
 
 void load_interaction()
@@ -429,6 +487,11 @@ void reaction(vector<double> &beta, const int sim_react)
 
         load_lattice(b);
 
+        for (int i = 0; i < L; i++)
+            for (int j = 0; j < L; j++)
+                for (int k = 0; k < q; k++)
+                    l_react[i][j][k] = 0;
+
         // cout << b << " " << endl;
         for (int i = 0; i < sim_react; i++)
         {
@@ -438,6 +501,8 @@ void reaction(vector<double> &beta, const int sim_react)
 
         sprintf(fname, "reaction_tempo.csv");
         save_vector(tempo, fname);
+
+        save_l_react(b);
     }
 }
 
@@ -447,7 +512,7 @@ void condensation(vector<double> &beta, const int sim_cond)
 
     char fname[64];
 
-    save_lattice(0.0);
+    // save_lattice(0.0);
 
     for (int j = 0; j < beta.size(); j++)
     {
@@ -473,9 +538,9 @@ void init_beta(
     const double betamax,
     const int betanum)
 {
-    for (int i = 1; i <= betanum; i++)
+    for (int i = 0; i < betanum; i++)
     {
-        double b = betamin + (betamax - betamin) * double(i) / double(betanum); // inverse temperature (cooling)
+        double b = betamin + (betamax - betamin) * double(i) / double(betanum - 1); // inverse temperature (cooling)
         beta.push_back(b);
     }
 }

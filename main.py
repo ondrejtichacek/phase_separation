@@ -98,7 +98,7 @@ class LatticePhaseReact():
     def perform_reaction_simulation(self, interaction, num_sim_react):
 
         cond_sim_dir = self.res_dir / f'condensation'
-        sim_dir = self.res_dir / f'interaction_{interaction:.1f}'
+        sim_dir = self.res_dir / f'interaction_{interaction:.3f}'
         
         if sim_dir.exists():
             shutil.rmtree(sim_dir)
@@ -248,7 +248,7 @@ class LatticePhaseReact():
 
         for i, interaction in enumerate(self.interaction_range):
 
-            sim_dir = self.res_dir / f'interaction_{interaction:.1f}'
+            sim_dir = self.res_dir / f'interaction_{interaction:.3f}'
 
             data = np.genfromtxt(sim_dir / f'reaction_tempo.csv')
             
@@ -277,7 +277,7 @@ class LatticePhaseReact():
 
         for i, interaction in enumerate(self.interaction_range):
 
-            sim_dir = self.res_dir / f'interaction_{interaction:.1f}'
+            sim_dir = self.res_dir / f'interaction_{interaction:.3f}'
 
             data = np.genfromtxt(sim_dir / f'reaction_tempo.csv')
 
@@ -333,13 +333,13 @@ class LatticePhaseReact():
 
             plt.figure()
 
-            data = np.genfromtxt(sim_dir / f'lattice_{beta:.1f}.csv')
+            data = np.genfromtxt(sim_dir / f'lattice_{beta:.3f}.csv')
 
             data[data == 0] = np.NaN
 
             ind = (int(np.floor(j/2)), np.remainder(j,2))
 
-            plt.imshow(data, cmap=plt.cm.Spectral)
+            plt.imshow(data, cmap=plt.cm.Spectral, interpolation='none')
             plt.title(f"{beta}")
             #axs[ind].title(f"beta = {beta}, int = {interaction}")
 
@@ -349,3 +349,30 @@ class LatticePhaseReact():
             #plt.ylabel("time")
 
         #plt.title("reaction time mean +- std error of mean")
+
+    def plot_reaction_flux(self, interaction, product):
+        
+        sim_dir = self.res_dir / f'interaction_{interaction:.3f}'
+
+        for j, beta in enumerate(self.beta_range):
+
+            f, (ax1, ax2) = plt.subplots(1, 2, sharey=True)
+
+            data = np.genfromtxt(sim_dir / f'lattice_{beta:.3f}.csv')
+
+            data[data == 0] = np.NaN
+
+            ax1.imshow(data, cmap=plt.cm.Spectral, interpolation='none', resample=False)
+            # ax1.title(f"{beta}")
+
+            data = np.genfromtxt(sim_dir / f'l_react_{beta:.3f}_{product}.csv')
+
+            #data = data - np.median(data)
+            #m = max([data.max(), -data.min()])
+            d = data.copy();
+            data[data == 0] = np.NaN
+
+            ax2.imshow(data, 
+                alpha=0.5+0.5*d/d.max(),
+                cmap=plt.cm.magma_r, interpolation='none', resample=False)#, vmin=-m, vmax=m)
+            # ax2.title(f"{beta}")
