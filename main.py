@@ -18,11 +18,14 @@ class LatticePhaseReact():
         interaction_range,
         volume_fraction,
         beta_range,
+        num_components=20,
         wrkdir=None):
 
         self.interaction_range = interaction_range
         self.volume_fraction = volume_fraction
         self.beta_range = beta_range
+
+        self.num_components = num_components
 
         if wrkdir is None:
             wrkdir = os.getcwd()
@@ -56,7 +59,7 @@ class LatticePhaseReact():
         out = subprocess.run(
             ["g++"] + CFLAGS + ["react_phase_sep.cpp"],
             capture_output=True)
-            
+
         if out.returncode > 0:
             print(out)
 
@@ -69,6 +72,8 @@ class LatticePhaseReact():
         sim_dir.mkdir(exist_ok=True)
         
         os.chdir(sim_dir)
+
+        self.save_condensate_interaction_matrix()
 
         out = subprocess.run(["../../a.out",
             f"0",
@@ -111,6 +116,8 @@ class LatticePhaseReact():
 
     def simulate_reaction(self, num_sim_react=1000, parallel=True):
 
+        self.save_reaction_interaction_matrix()
+
         if parallel is False:
             for interaction in self.interaction_range:
                 self.perform_reaction_simulation(interaction, num_sim_react)
@@ -118,7 +125,85 @@ class LatticePhaseReact():
             pfun = lambda x: self.perform_reaction_simulation(x, num_sim_react)
             Parallel(n_jobs=6) (delayed(pfun)(ir) for ir in self.interaction_range)
 
-    def plot_interaction_matrices(self):
+    def generate_reaction_interaction(self, ver="ones"):
+
+        q = self.num_components
+
+        if ver == "ones":
+            I = np.ones((q+1, q+1), dtype=float)
+            I[0,:] = 0
+            I[:,0] = 0
+
+        elif ver == "rand1":
+            I = np.empty((q+1, q+1), dtype=float)
+
+            for i in range(1, q+1):
+                # interaction with solute (=0 default)
+                I[0,i] = 0;
+                I[i,0] = 0;
+
+            for i in range(1, q+1):
+                for j in range(1, q+1):
+                    I[i,j] = np.random.uniform(0, 2)
+
+            for i in range(1, q+1):
+                for j in range(i, q+1):
+                    I[i,j] = np.random.uniform(1, 2)
+
+            for i in range(1, q+1):
+                for j in range(1, i):
+                    I[i,j] = np.random.uniform(0, 1)
+
+            for i in range(1, q+1):
+                for j in range(i, q+1):
+                    if (i == j):
+                        I[i,j] = 0
+                    if (i + 1 == j):
+                        I[i,j] = 2
+
+        self.I = I
+
+    def generate_condensate_interaction(self, ver="ones"):
+
+        q = self.num_components
+
+        if ver == "ones":
+            J = np.ones((q+1, q+1), dtype=float)
+            J[0,:] = 0
+            J[:,0] = 0
+
+        elif ver == "rand1":
+            J = np.empty((q+1, q+1), dtype=float)
+
+            for i in range(1, q+1):
+                # interaction with solute (=0 default)
+                J[0,i] = 0;
+                J[i,0] = 0;
+
+            for i in range(1, q+1):
+                for j in range(i, q+1):
+                    if (i == j):
+                        J[i,j] = 1 # self interaction  (=1 default)
+                    elif (j >= i + 1):
+                        J[i,j] = np.random.uniform(0, 2)
+                    J[j,i] = J[i,j]
+
+        # print(J)
+
+        self.J = J
+
+
+    def save_condensate_interaction_matrix(self):
+
+        sim_dir = self.res_dir / f'condensation'
+        np.savetxt(sim_dir / "J.csv", self.J, fmt='%.6f')
+
+    def save_reaction_interaction_matrix(self):
+
+        sim_dir = self.res_dir / f'condensation'
+        np.savetxt(sim_dir / "I.csv", self.I, fmt='%.6f')
+
+    def plot_condensation_interaction_matrix(self):
 
         plt.figure()
         sim_dir = self.res_dir / f'condensation'
@@ -133,7 +218,10 @@ class LatticePhaseReact():
         cbar = plt.colorbar()
         cbar.ax.set_ylabel("interaction strength")
 
+    def plot_reaction_interaction_matrix(self):
+        
         plt.figure()
+        sim_dir = self.res_dir / f'condensation'
 
         I = np.genfromtxt(sim_dir / f'I.csv')
 

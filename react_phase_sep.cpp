@@ -8,10 +8,10 @@
 
 using namespace std;
 
-const int L = 100;    // size of the system: 2D square lattice  LxL periodic boundary conditions
-const int q = 20;     // number of enzymes (length of the pathway)
-double volume_frac;   // volume fraction of the solutes
-double interaction;   // interaction between substrate and enzymes (uniform)
+const int L = 100;  // size of the system: 2D square lattice  LxL periodic boundary conditions
+const int q = 20;   // number of enzymes (length of the pathway)
+double volume_frac; // volume fraction of the solutes
+double interaction; // interaction between substrate and enzymes (uniform)
 
 // global variables
 double I[q + 1][q + 1]; // interaction matrix
@@ -45,9 +45,9 @@ double stdev(const int array[], int size)
     return sqrt(variance / size);
 }
 
-void init(const double conc)
+void init_interaction()
 {
-    // initialization: filling interaction matrix & the lattice variables (uniform volume fraction)
+    // initialization: filling interaction matrix
 
     // interaction matrix
     for (int i = 0; i <= q; i++)
@@ -58,7 +58,7 @@ void init(const double conc)
 
     for (int i = 1; i <= q; i++)
         for (int j = 1; j <= q; j++)
-            I[i][j] = 2*(1 - casual());
+            I[i][j] = 2 * (1 - casual());
 
     for (int i = 1; i <= q; i++)
         for (int j = i; j <= q; j++)
@@ -97,13 +97,17 @@ void init(const double conc)
             //    J[i][j] = 1.5;
             else if (j >= i + 1)
                 // J[i][j] = 1; // cross interactions (=1 default)
-                J[i][j] = 2*(1 - casual());
-                // J[i][j] = d;
-                // J[i][j] = 0;
+                J[i][j] = 2 * (1 - casual());
+            // J[i][j] = d;
+            // J[i][j] = 0;
             J[j][i] = J[i][j];
         }
     }
+}
 
+void init_lattice(const double conc)
+{
+    // initialization: filling lattice variable (uniform volume fraction)
     // latice
     for (int i = 0; i <= L - 1; i++)
     { // filling the lattice with volume fraction "conc" at random (beta=0)
@@ -182,8 +186,12 @@ double energy()
     {
         for (int j = 0; j < L; j++)
         {
-            int ii = i+1; if (ii == L) ii = 0;
-            int jj = j+1; if (jj == L) jj = 0;
+            int ii = i + 1;
+            if (ii == L)
+                ii = 0;
+            int jj = j + 1;
+            if (jj == L)
+                jj = 0;
 
             e += J[spin[i][j]][spin[ii][j]];
             e += J[spin[i][j]][spin[i][jj]];
@@ -284,7 +292,7 @@ int time_to_react(const double F, const double interaction)
             }
             else
             {
-                if (cas < 1. / exp(2*T1*interaction))
+                if (cas < 1. / exp(2 * T1 * interaction))
                     okkei = 1;
             }
         }
@@ -336,6 +344,21 @@ void save_lattice(const double beta)
     fout.close();
 }
 
+void load_interaction()
+{
+    ifstream infile_I("I.csv");
+    ifstream infile_J("J.csv");
+
+    for (int i = 0; i < q + 1; i++)
+    {
+        for (int j = 0; j < q + 1; j++)
+        {
+            infile_I >> I[i][j];
+            infile_J >> J[i][j];
+        }
+    }
+}
+
 void save_interaction()
 {
     char fname1[100];
@@ -349,9 +372,9 @@ void save_interaction()
     ofstream fout2;
     fout2.open(fname2);
 
-    for (int i = 0; i < q+1; i++)
+    for (int i = 0; i < q + 1; i++)
     {
-        for (int j = 0; j < q+1; j++)
+        for (int j = 0; j < q + 1; j++)
         {
             fout1 << J[i][j] << " ";
             fout2 << I[i][j] << " ";
@@ -370,7 +393,7 @@ void save_vector(const vector<int> &arr, char *fname)
 
     for (int i = 0; i < arr.size(); i++)
         fout << arr[i] << " ";
-    
+
     fout << endl;
     fout.close();
 }
@@ -382,14 +405,14 @@ void save_vector(const vector<double> &arr, char *fname)
 
     for (int i = 0; i < arr.size(); i++)
         fout << arr[i] << " ";
-    
+
     fout << endl;
     fout.close();
 }
 
 void reaction(vector<double> &beta, const int sim_react)
 {
-    vector<int> tempo (sim_react);
+    vector<int> tempo(sim_react);
 
     char fname[64];
 
@@ -413,17 +436,17 @@ void reaction(vector<double> &beta, const int sim_react)
 
 void condensation(vector<double> &beta, const int sim_cond)
 {
-    vector<double> cond_energy (sim_cond);
+    vector<double> cond_energy(sim_cond);
 
     char fname[64];
-    
+
     save_lattice(0.0);
 
     for (int j = 0; j < beta.size(); j++)
     {
         double b = beta[j];
         // cout << b << " " << endl;
-        
+
         for (int i = 0; i < sim_cond; i++)
         {
             // simulate the condensation
@@ -443,7 +466,7 @@ void init_beta(
     const double betamax,
     const int betanum)
 {
-    for(int i = 1; i <= betanum; i++)
+    for (int i = 1; i <= betanum; i++)
     {
         double b = betamin + (betamax - betamin) * double(i) / double(betanum); // inverse temperature (cooling)
         beta.push_back(b);
@@ -459,8 +482,20 @@ int core(
 {
     srand(time(0));
 
-    init(volume_frac);
-    save_interaction();
+    init_lattice(volume_frac);
+
+    bool load_interaction_from_file = true;
+
+    if (load_interaction_from_file)
+    {
+        load_interaction();
+        // save_interaction();
+    }
+    else
+    {
+        init_interaction();
+        save_interaction();
+    }
 
     vector<double> beta;
     init_beta(beta, betamin, betamax, betanum);
@@ -474,7 +509,7 @@ int core(
     {
         reaction(beta, sim_react);
     }
-    
+
     return 0;
 }
 
@@ -507,7 +542,6 @@ int main(int argc, char **argv)
     int sim_react = 1000;
     if (argc > 7)
         sim_react = atoi(argv[7]);
-        
 
     return core(betamin, betamax, betanum, sim_cond, sim_react);
 }
