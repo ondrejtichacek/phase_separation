@@ -8,8 +8,16 @@
 
 using namespace std;
 
-const int L = 100;  // size of the system: 2D square lattice  LxL periodic boundary conditions
-const int q = 20;   // number of enzymes (length of the pathway)
+#ifndef LATTICE_SIZE
+#define LATTICE_SIZE 100
+#endif
+
+#ifndef NUM_COMPONENTS
+#define NUM_COMPONENTS 20
+#endif
+
+const int L = LATTICE_SIZE;  // size of the system: 2D square lattice  LxL periodic boundary conditions
+const int q = NUM_COMPONENTS;   // number of enzymes (length of the pathway)
 double volume_frac; // volume fraction of the solutes
 double interaction; // interaction between substrate and enzymes (uniform)
 
@@ -261,7 +269,7 @@ int time_to_react(const double F, const double interaction)
 
         int okkei = 1;
 
-        if (false)
+        if (true)
         {
             // we go from K to 0, where K > 0
             if (spin[newpos[0]][newpos[1]] == 0 && spin[pos[0]][pos[1]] > 0)
@@ -269,15 +277,13 @@ int time_to_react(const double F, const double interaction)
             // if (spin[newpos[0]][newpos[1]] > 0 && spin[newpos[0]][newpos[1]] != counter + 1)
             {
                 // decide whether to accept step
-                cas = casual();
                 okkei = 0;
-                if (cas < 1. / exp(F))
+                if (casual() < 1. / exp(F))
                     okkei = 1;
             }
         }
         else
         {
-            cas = casual();
             okkei = 0;
 
             int i1 = counter;
@@ -292,7 +298,8 @@ int time_to_react(const double F, const double interaction)
             }
             else
             {
-                if (cas < 1. / exp(2 * T1 * interaction))
+                // if (cas < 1. / exp(2 * T1 * interaction))
+                if (casual() < 1. / exp(T1 * F))
                     okkei = 1;
             }
         }

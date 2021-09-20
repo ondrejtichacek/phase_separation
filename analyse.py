@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[ ]:
+# In[182]:
 
 
 # conda create -n phase-sep
@@ -11,20 +11,15 @@
 get_ipython().run_line_magic('reload_ext', 'autoreload')
 get_ipython().run_line_magic('autoreload', '2')
 
-import os
 import numpy as np
 import matplotlib
-import matplotlib.pyplot as plt
-from pathlib import Path
 from main import LatticePhaseReact
 
-import subprocess
-import shutil
 
 matplotlib.rcParams['figure.figsize'] = (14,8)
 
 
-# In[ ]:
+# In[183]:
 
 
 interaction_range = np.linspace(0, 1.4, 6)
@@ -39,46 +34,58 @@ PR = LatticePhaseReact(
     interaction_range=interaction_range,
     volume_fraction=volume_fraction,
     beta_range=beta_range,
+    num_components=6,
+    lattice_size=100,
     wrkdir=wrkdir)
 
 
-# In[ ]:
+# In[184]:
 
 
 # CONDENSATION
+PR.generate_condensate_interaction('ones')
 PR.simulate_condensation(num_sim_cond=1000)
 
 
-# In[ ]:
-
-
-# REACTION
-PR.simulate_reaction(num_sim_react=1000, parallel=True)
-
-
-# In[ ]:
+# In[185]:
 
 
 matplotlib.rcParams['figure.figsize'] = (7,4)
-PR.plot_interaction_matrices()
+PR.plot_condensation_interaction_matrix()
 
 
-# In[ ]:
+# In[186]:
+
+
+# REACTION
+PR.generate_reaction_interaction('ones')
+PR.simulate_reaction(num_sim_react=1000, parallel=True)
+
+
+# In[187]:
+
+
+matplotlib.rcParams['figure.figsize'] = (7,4)
+PR.plot_reaction_interaction_matrix()
+
+
+# In[188]:
 
 
 matplotlib.rcParams['figure.figsize'] = (7,4)
 PR.plot_condensation_convergence()
 
 
-# In[ ]:
+# In[189]:
 
 
 matplotlib.rcParams['figure.figsize'] = (14,8)
 PR.plot_time_to_react()
 
 
-# In[ ]:
+# In[190]:
 
 
+matplotlib.rcParams['figure.figsize'] = (14,8)
 PR.plot_condensation()
 

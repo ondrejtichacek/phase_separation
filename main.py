@@ -19,6 +19,7 @@ class LatticePhaseReact():
         volume_fraction,
         beta_range,
         num_components=20,
+        lattice_size=100,
         wrkdir=None):
 
         self.interaction_range = interaction_range
@@ -26,6 +27,7 @@ class LatticePhaseReact():
         self.beta_range = beta_range
 
         self.num_components = num_components
+        self.lattice_size = lattice_size
 
         if wrkdir is None:
             wrkdir = os.getcwd()
@@ -41,7 +43,7 @@ class LatticePhaseReact():
     def make(self):
         os.chdir(self.wrkdir)
 
-        CFLAGS=[
+        CFLAGS = [
             "-march=x86-64",
             "-mtune=native",
             "-O2",
@@ -56,8 +58,13 @@ class LatticePhaseReact():
             "-fcf-protection",
         ]
 
+        DFLAGS = [
+            f"-D NUM_COMPONENTS={self.num_components}",
+            f"-D LATTICE_SIZE={self.lattice_size}",
+        ]
+
         out = subprocess.run(
-            ["g++"] + CFLAGS + ["react_phase_sep.cpp"],
+            ["g++"] + CFLAGS + DFLAGS + ["react_phase_sep.cpp"],
             capture_output=True)
 
         if out.returncode > 0:
@@ -258,7 +265,7 @@ class LatticePhaseReact():
             plt.xlabel("beta ~ organization")
             plt.ylabel("time")
             # plt.xlim((0,4))
-            plt.ylim((0,30000))
+            # plt.ylim((0,30000))
 
         plt.title("reaction time mean +- std error of mean")
 
