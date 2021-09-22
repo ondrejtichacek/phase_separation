@@ -1,6 +1,6 @@
 # conda create -n phase-sep
 # conda activate phase-sep
-# conda install -c conda-forge numpy matplotlib ipykernel
+# conda install -c conda-forge numpy scipy matplotlib ipykernel tqdm
 
 import os
 import numpy as np
@@ -8,18 +8,45 @@ import matplotlib
 import matplotlib.pyplot as plt
 from pathlib import Path
 from joblib import Parallel, delayed
+import itertools
 
 import subprocess
 import shutil
 
+def parameter_product(**kwargs):
+    L = []
+    for V in itertools.product(*kwargs.values()):
+        kw = {}
+        for i, key in enumerate(kwargs.keys()):
+            kw[key] = V[i]
+        L.append(kw)
+
+    return L
+
+def mock_simulate(**kwargs):
+    s = f"sim with args {kwargs}"
+    print(s)
+    return s
+
+def simulator(fun, params, parallel=True):
+    res = []
+    if parallel is True:
+        res = Parallel(n_jobs=6, verbose=10) (delayed(fun)(**p) for p in params)
+    else:
+        for p in params:
+            res.append(fun(**p))
+    
+    return res
+
 class LatticePhaseReact():
     def __init__(
         self,
-        interaction_range,
-        volume_fraction,
-        beta_range,
+        volume_fraction=0.3,
+        beta_range=np.linspace(0, 3, 30+1),
+        interaction_range=np.linspace(0, 1, 6),
         num_components=20,
         lattice_size=100,
+        log_concentration=False,
         wrkdir=None):
 
         self.interaction_range = interaction_range
@@ -28,6 +55,11 @@ class LatticePhaseReact():
 
         self.num_components = num_components
         self.lattice_size = lattice_size
+
+        self.log_concentration = log_concentration
+
+        self.condensation_interaction_version = 'default'
+        self.reaction_interaction_version = 'default'
 
         if wrkdir is None:
             wrkdir = os.getcwd()
@@ -38,10 +70,38 @@ class LatticePhaseReact():
         # shutil.rmtree(self.res_dir)
         self.res_dir.mkdir(exist_ok=True)
 
-        self.make()
+    def get_defining_parameters(self, part):
 
-    def make(self):
-        os.chdir(self.wrkdir)
+        defining_parameters = [
+            ('volume_fraction', 'Vf'),
+            ('lattice_size', 'd'),
+            ('num_components', 'n'),
+            ('condensation_interaction_version', 'vC'),
+        ]
+
+        if part == 'reaction':
+            defining_parameters.append(
+                ('reaction_interaction_version', 'vR'))
+
+        return defining_parameters
+
+    def get_char_string(self, part):
+        s = ""
+        for (p, n) in self.get_defining_parameters(part):
+            s += f"{n}_{getattr(self, p)}"
+        return s
+
+    def get_dir_condensation(self):
+        return self.res_dir / (f'condensation_' + self.get_char_string('condensation'))
+
+    def get_dir_reaction(self, interaction):
+        return self.res_dir / (f'reaction_' + f'interaction_{interaction:.3f}_' + self.get_char_string('reaction'))
+
+    def make(self, wrkdir=None):
+        if wrkdir is None:
+            wrkdir = self.wrkdir
+        
+        os.chdir(wrkdir)
 
         CFLAGS = [
             "-march=x86-64",
@@ -63,16 +123,20 @@ class LatticePhaseReact():
             f"-D LATTICE_SIZE={self.lattice_size}",
         ]
 
+        if self.log_concentration is True:
+            DFLAGS.append(f"-D LOG_CONCENTRATION=1")
+
         out = subprocess.run(
-            ["g++"] + CFLAGS + DFLAGS + ["react_phase_sep.cpp"],
+            ["g++"] + CFLAGS + DFLAGS + [self.wrkdir / "react_phase_sep.cpp"],
             capture_output=True)
 
         if out.returncode > 0:
             print(out)
+            raise(ValueError("Something went wrong"))
 
     def simulate_condensation(self, num_sim_cond=1000):
 
-        sim_dir = self.res_dir / f'condensation'
+        sim_dir = self.get_dir_condensation()
         
         if sim_dir.exists():
             shutil.rmtree(sim_dir)
@@ -82,7 +146,9 @@ class LatticePhaseReact():
 
         self.save_condensate_interaction_matrix()
 
-        out = subprocess.run(["../../a.out",
+        self.make(wrkdir=sim_dir)
+
+        out = subprocess.run(["./a.out",
             f"0",
             f"{self.volume_fraction}",
             f"{self.beta_range[0]}",
@@ -94,11 +160,12 @@ class LatticePhaseReact():
 
         if out.returncode > 0:
             print(out)
+            raise(ValueError("Something went wrong"))
 
     def perform_reaction_simulation(self, interaction, num_sim_react):
 
-        cond_sim_dir = self.res_dir / f'condensation'
-        sim_dir = self.res_dir / f'interaction_{interaction:.3f}'
+        cond_sim_dir = self.get_dir_condensation()
+        sim_dir = self.get_dir_reaction(interaction)
         
         if sim_dir.exists():
             shutil.rmtree(sim_dir)
@@ -108,7 +175,7 @@ class LatticePhaseReact():
 
         os.chdir(sim_dir)
 
-        out = subprocess.run(["../../a.out",
+        out = subprocess.run(["./a.out",
             f"{interaction}",
             f"{self.volume_fraction}",
             f"{self.beta_range[0]}",
@@ -132,7 +199,9 @@ class LatticePhaseReact():
             pfun = lambda x: self.perform_reaction_simulation(x, num_sim_react)
             Parallel(n_jobs=6) (delayed(pfun)(ir) for ir in self.interaction_range)
 
-    def generate_reaction_interaction(self, ver="ones"):
+    def generate_reaction_interaction(self, ver="ones", r=0.4, s=0.2):
+
+        self.reaction_interaction_version = ver
 
         q = self.num_components
 
@@ -167,10 +236,18 @@ class LatticePhaseReact():
                         I[i,j] = 0
                     if (i + 1 == j):
                         I[i,j] = 2
+        
+        elif ver == "rand2":
+            I = np.random.uniform(0+r, 2-r, size=(q+1, q+1))
+            
+            I[0,:] = np.random.uniform(0, s, size=(q+1))
+            I[:,0] = np.random.uniform(0, s, size=(q+1))
 
         self.I = I
 
-    def generate_condensate_interaction(self, ver="ones"):
+    def generate_condensate_interaction(self, ver="ones", r=0.4, s=0.2):
+
+        self.condensation_interaction_version = ver
 
         q = self.num_components
 
@@ -195,6 +272,17 @@ class LatticePhaseReact():
                         J[i,j] = np.random.uniform(0, 2)
                     J[j,i] = J[i,j]
 
+        elif ver == "rand2":
+            J = np.random.uniform(0+r, 2-r, size=(q+1, q+1))
+            
+            for i in range(1, q+1):
+                for j in range(i, q+1):
+                    J[j,i] = J[i,j]
+
+            # interaction with solute
+            J[0,:] = np.random.uniform(0, s, size=(q+1))
+            J[:,0] = np.random.uniform(0, s, size=(q+1))
+
         # print(J)
 
         self.J = J
@@ -202,18 +290,18 @@ class LatticePhaseReact():
 
     def save_condensate_interaction_matrix(self):
 
-        sim_dir = self.res_dir / f'condensation'
+        sim_dir = self.get_dir_condensation()
         np.savetxt(sim_dir / "J.csv", self.J, fmt='%.6f')
 
     def save_reaction_interaction_matrix(self):
 
-        sim_dir = self.res_dir / f'condensation'
+        sim_dir = self.get_dir_condensation()
         np.savetxt(sim_dir / "I.csv", self.I, fmt='%.6f')
 
     def plot_condensation_interaction_matrix(self):
 
         plt.figure()
-        sim_dir = self.res_dir / f'condensation'
+        sim_dir = self.get_dir_condensation()
 
         J = np.genfromtxt(sim_dir / f'J.csv')
 
@@ -228,7 +316,7 @@ class LatticePhaseReact():
     def plot_reaction_interaction_matrix(self):
         
         plt.figure()
-        sim_dir = self.res_dir / f'condensation'
+        sim_dir = self.get_dir_condensation()
 
         I = np.genfromtxt(sim_dir / f'I.csv')
 
@@ -240,6 +328,24 @@ class LatticePhaseReact():
         cbar = plt.colorbar()
         cbar.ax.set_ylabel("interaction strength")
 
+    def get_time_to_react(self):
+        time_to_react = []
+        time_to_react_err = []
+
+        for i, interaction in enumerate(self.interaction_range):
+
+            sim_dir = self.get_dir_reaction(interaction)
+
+            data = np.genfromtxt(sim_dir / f'reaction_tempo.csv')
+            
+            y = np.mean(data, axis=1)
+            e = np.std(data, axis=1) / np.sqrt(data.shape[1])
+
+            time_to_react.append(y)
+            time_to_react_err.append(e)
+
+        return time_to_react, time_to_react_err
+
     def plot_time_to_react(self):
 
         colors = plt.cm.Spectral(np.linspace(0, 1, self.interaction_range.size))
@@ -248,7 +354,7 @@ class LatticePhaseReact():
 
         for i, interaction in enumerate(self.interaction_range):
 
-            sim_dir = self.res_dir / f'interaction_{interaction:.3f}'
+            sim_dir = self.get_dir_reaction(interaction)
 
             data = np.genfromtxt(sim_dir / f'reaction_tempo.csv')
             
@@ -277,7 +383,7 @@ class LatticePhaseReact():
 
         for i, interaction in enumerate(self.interaction_range):
 
-            sim_dir = self.res_dir / f'interaction_{interaction:.3f}'
+            sim_dir = self.get_dir_reaction(interaction)
 
             data = np.genfromtxt(sim_dir / f'reaction_tempo.csv')
 
@@ -295,11 +401,26 @@ class LatticePhaseReact():
         cbar = plt.colorbar(sm)
         cbar.ax.set_ylabel("interaction")
 
+    @property
+    def condensation_energy(self):
+
+        sim_dir = self.get_dir_condensation()
+
+        E = np.zeros(self.beta_range.size)
+
+        data = np.genfromtxt(sim_dir / f'cond_energy.csv')
+
+        for j, beta in enumerate(self.beta_range):
+
+            E[j] = np.mean(data[j,:])
+            
+        return E
+
     def plot_condensation_convergence(self):
 
         colors = plt.cm.Spectral(np.linspace(0, 1, self.beta_range.size))
 
-        sim_dir = self.res_dir / f'condensation'
+        sim_dir = self.get_dir_condensation()
 
         plt.figure()
 
@@ -327,7 +448,7 @@ class LatticePhaseReact():
         plt.ylabel("mean energy")
 
     def plot_condensation(self):
-        sim_dir = self.res_dir / f'condensation'
+        sim_dir = self.get_dir_condensation()
 
         for j, beta in enumerate(self.beta_range):
 
@@ -352,7 +473,7 @@ class LatticePhaseReact():
 
     def plot_reaction_flux(self, interaction, product):
         
-        sim_dir = self.res_dir / f'interaction_{interaction:.3f}'
+        sim_dir = self.get_dir_reaction(interaction)
 
         for j, beta in enumerate(self.beta_range):
 
@@ -361,11 +482,16 @@ class LatticePhaseReact():
             data = np.genfromtxt(sim_dir / f'lattice_{beta:.3f}.csv')
 
             data[data == 0] = np.NaN
+            #data[data != product] = 0
 
             ax1.imshow(data, cmap=plt.cm.Spectral, interpolation='none', resample=False)
             # ax1.title(f"{beta}")
 
-            data = np.genfromtxt(sim_dir / f'l_react_{beta:.3f}_{product}.csv')
+            data1 = np.genfromtxt(sim_dir / f'l_react_{beta:.3f}_{product}.csv')
+            data2 = np.genfromtxt(sim_dir / f'l_react_{beta:.3f}_{product+1}.csv')
+
+            data = data1
+            # data = data2 - data1
 
             #data = data - np.median(data)
             #m = max([data.max(), -data.min()])
@@ -373,6 +499,6 @@ class LatticePhaseReact():
             data[data == 0] = np.NaN
 
             ax2.imshow(data, 
-                alpha=0.5+0.5*d/d.max(),
+                #alpha=0.5+0.5*d/d.max(),
                 cmap=plt.cm.magma_r, interpolation='none', resample=False)#, vmin=-m, vmax=m)
             # ax2.title(f"{beta}")

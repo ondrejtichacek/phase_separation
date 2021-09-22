@@ -12,8 +12,8 @@ using namespace std;
 #define INTERACTION_WALK true
 #endif
 
-#ifndef WALK_CROSS
-#define WALK_CROSS true
+#ifndef LOG_CONCENTRATION
+#define LOG_CONCENTRATION false
 #endif
 
 #ifndef LATTICE_SIZE
@@ -261,35 +261,31 @@ int time_to_react(const double F, const double interaction)
         }
 
         // random walk
-        if (WALK_CROSS == true)
-        {
-            int s = 1;
-            if (casual() < 0.5)
-                s = -1;
+        int s = 1;
+        if (casual() < 0.5)
+            s = -1;
 
-            if (casual() < 0.5)
-            {
-                newpos[0] = pos[0] + s;
-                newpos[1] = pos[1];
-            }
-            else
-            {
-                newpos[0] = pos[0];
-                newpos[1] = pos[1] + s;
-            }
+        if (casual() < 0.5)
+        {
+            newpos[0] = pos[0] + s;
+            newpos[1] = pos[1];
         }
         else
         {
-            if (casual() < 0.5)
-                newpos[0] = pos[0] + 1;
-            else
-                newpos[0] = pos[0] - 1;
-
-            if (casual() < 0.5)
-                newpos[1] = pos[1] + 1;
-            else
-                newpos[1] = pos[1] - 1;
+            newpos[0] = pos[0];
+            newpos[1] = pos[1] + s;
         }
+
+        // old version - wrong
+        // if (casual() < 0.5)
+        //     newpos[0] = pos[0] + 1;
+        // else
+        //     newpos[0] = pos[0] - 1;
+
+        // if (casual() < 0.5)
+        //     newpos[1] = pos[1] + 1;
+        // else
+        //     newpos[1] = pos[1] - 1;
 
 
         // periodic boundary
@@ -322,7 +318,7 @@ int time_to_react(const double F, const double interaction)
             else
             {
                 // if (cas < 1. / exp(2 * T1 * interaction))
-                if (casual() < 1. / exp(T1 * F))
+                if (casual() < 1. / exp(T1 * F / 2))
                     okkei = 1;
             }
         }
@@ -502,7 +498,8 @@ void reaction(vector<double> &beta, const int sim_react)
         sprintf(fname, "reaction_tempo.csv");
         save_vector(tempo, fname);
 
-        save_l_react(b);
+        if (LOG_CONCENTRATION == true)
+            save_l_react(b);
     }
 }
 
