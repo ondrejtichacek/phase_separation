@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from joblib import Parallel, delayed
 import itertools
+import scipy.optimize
 
 import subprocess
 import shutil
@@ -502,3 +503,33 @@ class LatticePhaseReact():
                 #alpha=0.5+0.5*d/d.max(),
                 cmap=plt.cm.magma_r, interpolation='none', resample=False)#, vmin=-m, vmax=m)
             # ax2.title(f"{beta}")
+
+    def condensation_temperature(self, plotflag=False, plot_kwargs={}):
+
+        E = self.condensation_energy
+        E -= E[0]
+
+        def func(x, a, b, c, d, e):
+            return a*x + d*(0.5 + np.arctan(b*(x-c))/np.pi) + e
+
+        xdata = self.beta_range
+        ydata = E / min(E)
+
+        popt, pcov = scipy.optimize.curve_fit(func, xdata, ydata,
+            p0=(0.2, 1, 2, 0.5, 0),
+            bounds=((-1, 0, 0, -10, -1), (1, 4, 10, 2, 1),))
+
+        p = " ".join([f"{p:.2f}" for p in popt])
+
+        inflection_point = popt[2]
+        beta_critical = inflection_point
+
+        if plotflag is True:
+            plt.plot(xdata, ydata, **plot_kwargs)
+            plt.plot(xdata, func(xdata, *popt), 
+                ':', label=p, **plot_kwargs)
+            plt.plot(beta_critical, func(beta_critical, *popt), 
+                'o', **plot_kwargs)
+            plt.legend()
+
+        return beta_critical
