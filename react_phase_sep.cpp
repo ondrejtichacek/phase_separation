@@ -16,6 +16,10 @@ using namespace std;
 #define LOG_CONCENTRATION false
 #endif
 
+#ifndef EXTENDED_NEIGHBORHOOD
+#define EXTENDED_NEIGHBORHOOD true
+#endif
+
 #ifndef LATTICE_SIZE
 #define LATTICE_SIZE 100
 #endif
@@ -143,15 +147,15 @@ void init_lattice(const double conc)
 
 double kawasaki(const double beta)
 { // Kawasaki Montecarlo:  exchange two particles position
-    int i1 = int(casual() * L);
-    int j1 = int(casual() * L);
-    int ip = (i1 + 1) % L;
-    int im = (L + i1 - 1) % L;
-    int jp = (j1 + 1) % L;
-    int jm = (L + j1 - 1) % L;
+    int i1 = int(casual() * L); // orig x
+    int j1 = int(casual() * L); // orig y
+    int ip1 = (i1 + 1) % L;     //      x + 1
+    int im1 = (L + i1 - 1) % L; //      x - 1
+    int jp1 = (j1 + 1) % L;     //      y + 1
+    int jm1 = (L + j1 - 1) % L; //      y - 1
 
-    int i2 = int(casual() * L);
-    int j2 = int(casual() * L);
+    int i2 = int(casual() * L); //  new x
+    int j2 = int(casual() * L); //  new y
     int ip2 = (i2 + 1) % L;
     int im2 = (L + i2 - 1) % L;
     int jp2 = (j2 + 1) % L;
@@ -161,12 +165,57 @@ double kawasaki(const double beta)
 
     if (spin[i1][j1] != spin[i2][j2])
     {
-        double F1 = J[spin[i1][j1]][spin[i1][jm]] + J[spin[i1][j1]][spin[i1][jp]] + J[spin[i1][j1]][spin[im][j1]] + J[spin[i1][j1]][spin[ip][j1]];
-        double F1n = J[spin[i1][j1]][spin[i2][jm2]] + J[spin[i1][j1]][spin[i2][jp2]] + J[spin[i1][j1]][spin[im2][j2]] + J[spin[i1][j1]][spin[ip2][j2]];
-        double F2n = J[spin[i2][j2]][spin[i1][jm]] + J[spin[i2][j2]][spin[i1][jp]] + J[spin[i2][j2]][spin[im][j1]] + J[spin[i2][j2]][spin[ip][j1]];
-        double F2 = J[spin[i2][j2]][spin[i2][jm2]] + J[spin[i2][j2]][spin[i2][jp2]] + J[spin[i2][j2]][spin[im2][j2]] + J[spin[i2][j2]][spin[ip2][j2]];
+        // energy contribution of spot 1 ORIG
+        double F1 = (J[spin[i1][j1]][spin[i1][jm1]]   // down interaction
+                   + J[spin[i1][j1]][spin[i1][jp1]]   // up
+                   + J[spin[i1][j1]][spin[im1][j1]]   // left
+                   + J[spin[i1][j1]][spin[ip1][j1]]); // right
 
-        double delta = F1 + F2 - F1n - F2n; // energy variation for the swap
+        // energy contribution of spot 2 ORIG
+        double F2 = (J[spin[i2][j2]][spin[i2][jm2]]   
+                   + J[spin[i2][j2]][spin[i2][jp2]]
+                   + J[spin[i2][j2]][spin[im2][j2]]
+                   + J[spin[i2][j2]][spin[ip2][j2]]);
+
+        // energy contribution of spot 1 NEW
+        double G1 = (J[spin[i1][j1]][spin[i2][jm2]]
+                   + J[spin[i1][j1]][spin[i2][jp2]]
+                   + J[spin[i1][j1]][spin[im2][j2]]
+                   + J[spin[i1][j1]][spin[ip2][j2]]);
+
+        // energy contribution of spot 2 NEW
+        double G2 = (J[spin[i2][j2]][spin[i1][jm1]]
+                   + J[spin[i2][j2]][spin[i1][jp1]]
+                   + J[spin[i2][j2]][spin[im1][j1]]
+                   + J[spin[i2][j2]][spin[ip1][j1]]);
+
+        if (EXTENDED_NEIGHBORHOOD == true)
+        {
+            F1 += (J[spin[i1][j1]][spin[im1][jm1]]
+                 + J[spin[i1][j1]][spin[ip1][jp1]]
+                 + J[spin[i1][j1]][spin[im1][jp1]]
+                 + J[spin[i1][j1]][spin[ip1][jm1]]);
+
+            F2 += (J[spin[i2][j2]][spin[im2][jm2]]
+                 + J[spin[i2][j2]][spin[ip2][jp2]]
+                 + J[spin[i2][j2]][spin[im2][jp2]]
+                 + J[spin[i2][j2]][spin[ip2][jm2]]);
+
+            G1 += (J[spin[i1][j1]][spin[im2][jm2]]
+                 + J[spin[i1][j1]][spin[ip2][jp2]]
+                 + J[spin[i1][j1]][spin[im2][jp2]]
+                 + J[spin[i1][j1]][spin[ip2][jm2]]);
+
+            G2 += (J[spin[i2][j2]][spin[im1][jm1]]
+                 + J[spin[i2][j2]][spin[ip1][jp1]]
+                 + J[spin[i2][j2]][spin[im1][jp1]]
+                 + J[spin[i2][j2]][spin[ip1][jm1]]);
+        }
+
+        double delta = F1 + F2 - G1 - G2; // energy variation for the swap
+
+        delta /= 2;
+
         int news = 0;
 
         if (delta <= 0)
@@ -184,9 +233,9 @@ double kawasaki(const double beta)
 
         if (news == 1)
         {
-            int sp = spin[i1][j1];
+            int sp1 = spin[i1][j1];
             int sp2 = spin[i2][j2];
-            spin[i2][j2] = sp;
+            spin[i2][j2] = sp1;
             spin[i1][j1] = sp2;
         }
 

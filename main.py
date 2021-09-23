@@ -39,6 +39,11 @@ def simulator(fun, params, parallel=True):
     
     return res
 
+def find_nearest(a, a0):
+    "Element in nd array `a` closest to the scalar value `a0`"
+    idx = np.abs(a - a0).argmin()
+    return a.flat[idx]
+
 class LatticePhaseReact():
     def __init__(
         self,
@@ -47,6 +52,7 @@ class LatticePhaseReact():
         interaction_range=np.linspace(0, 1, 6),
         num_components=20,
         lattice_size=100,
+        extended_neighborhood=True,
         log_concentration=False,
         wrkdir=None):
 
@@ -56,6 +62,7 @@ class LatticePhaseReact():
 
         self.num_components = num_components
         self.lattice_size = lattice_size
+        self.extended_neighborhood = extended_neighborhood
 
         self.log_concentration = log_concentration
 
@@ -126,6 +133,13 @@ class LatticePhaseReact():
 
         if self.log_concentration is True:
             DFLAGS.append(f"-D LOG_CONCENTRATION=1")
+        else:
+            DFLAGS.append(f"-D LOG_CONCENTRATION=0")
+        
+        if self.extended_neighborhood is True:
+            DFLAGS.append(f"-D EXTENDED_NEIGHBORHOOD=1")
+        else:
+            DFLAGS.append(f"-D EXTENDED_NEIGHBORHOOD=0")
 
         out = subprocess.run(
             ["g++"] + CFLAGS + DFLAGS + [self.wrkdir / "react_phase_sep.cpp"],
@@ -449,28 +463,22 @@ class LatticePhaseReact():
         plt.ylabel("mean energy")
 
     def plot_condensation(self):
-        sim_dir = self.get_dir_condensation()
 
         for j, beta in enumerate(self.beta_range):
-
             plt.figure()
+            ax = plt.gca()
+            self.plot_lattice(beta, ax)
+            plt.title(f"beta = {beta}")
 
-            data = np.genfromtxt(sim_dir / f'lattice_{beta:.3f}.csv')
+    def plot_lattice(self, beta, ax):
 
-            data[data == 0] = np.NaN
+        sim_dir = self.get_dir_condensation()
+        data = np.genfromtxt(sim_dir / f'lattice_{beta:.3f}.csv')
+        data[data == 0] = np.NaN
 
-            ind = (int(np.floor(j/2)), np.remainder(j,2))
-
-            plt.imshow(data, cmap=plt.cm.Spectral, interpolation='none')
-            plt.title(f"{beta}")
-            #axs[ind].title(f"beta = {beta}, int = {interaction}")
-
-            #plt.plot(x, y, color=colors[i])
-            #plt.fill_between(x, y-e, y+e, alpha=0.2, edgecolor=colors[i], facecolor=colors[i])
-            #plt.xlabel("beta ~ organization")
-            #plt.ylabel("time")
-
-        #plt.title("reaction time mean +- std error of mean")
+        ax.imshow(data, cmap=plt.cm.Spectral, interpolation='none')
+        ax.set_xticks([])
+        ax.set_yticks([])
 
     def plot_reaction_flux(self, interaction, product):
         
@@ -516,8 +524,8 @@ class LatticePhaseReact():
         ydata = E / min(E)
 
         popt, pcov = scipy.optimize.curve_fit(func, xdata, ydata,
-            p0=(0.2, 1, 2, 0.5, 0),
-            bounds=((-1, 0, 0, -10, -1), (1, 4, 10, 2, 1),))
+            p0=(0.0, 3, 3, 0.5, 0),
+            bounds=((-1, 0, 0, -10, -1), (1, 10, 10, 2, 1),))
 
         p = " ".join([f"{p:.2f}" for p in popt])
 
