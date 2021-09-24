@@ -214,7 +214,10 @@ double kawasaki(const double beta)
 
         double delta = F1 + F2 - G1 - G2; // energy variation for the swap
 
-        delta /= 2;
+        if (EXTENDED_NEIGHBORHOOD == true)
+        {
+            delta /= 2;
+        }
 
         int news = 0;
 
