@@ -9,34 +9,60 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from joblib import Parallel, delayed
 import itertools
+import functools
 import scipy.optimize
 
 import subprocess
 import shutil
 
+def test_parameter_product():
+    PAR = {
+        'num_components': np.array([2,4,6]),
+        'chemical_potential': np.linspace(0.5, 3, 5),
+    }
+    params, ind = parameter_product(**PAR)
+
+    res = simulator(mock_simulate, params)
+
+    for i, n in enumerate(PAR['num_components']):
+        for j, c in enumerate(PAR['chemical_potential']):
+            assert n == res[ind(i,j)]['num_components']
+            assert c == res[ind(i,j)]['chemical_potential']
+
 def parameter_product(**kwargs):
-    L = []
+    for V in kwargs.values():
+        assert len(V) > 0
+    
+    dims = [V.size for V in kwargs.values()]
+    #linear_index = lambda *multi_index: np.ravel_multi_index(multi_index, dims)
+
+    params = []
     for V in itertools.product(*kwargs.values()):
         kw = {}
         for i, key in enumerate(kwargs.keys()):
             kw[key] = V[i]
-        L.append(kw)
+        params.append(kw)
 
-    return L
+    return params, dims
 
 def mock_simulate(**kwargs):
     s = f"sim with args {kwargs}"
     print(s)
-    return s
+    return kwargs
 
-def simulator(fun, params, parallel=True):
+def simulator(fun, params, dims=None, parallel=True):
     res = []
     if parallel is True:
         res = Parallel(n_jobs=6, verbose=10) (delayed(fun)(**p) for p in params)
     else:
         for p in params:
             res.append(fun(**p))
-    
+
+    if dims is not None:
+        res = np.reshape(res, dims)
+    else:
+        res = np.asarray(res)
+
     return res
 
 def find_nearest(a, a0):
@@ -48,16 +74,25 @@ class LatticePhaseReact():
     def __init__(
         self,
         volume_fraction=0.3,
-        beta_range=np.linspace(0, 3, 30+1),
+        chemical_potential=1.6,
+        beta_range=None,
+        beta_num=100,
         interaction_range=np.linspace(0, 1, 6),
         num_components=20,
         lattice_size=100,
         extended_neighborhood=True,
         log_concentration=False,
+        resdir=None,
         wrkdir=None):
 
         self.interaction_range = interaction_range
         self.volume_fraction = volume_fraction
+        self.chemical_potential = chemical_potential
+
+        if beta_range is None:
+            bc_estimate = beta_critical(self.volume_fraction)
+            beta_range = np.linspace(0, 2*bc_estimate, beta_num)
+
         self.beta_range = beta_range
 
         self.num_components = num_components
@@ -71,17 +106,27 @@ class LatticePhaseReact():
 
         if wrkdir is None:
             wrkdir = os.getcwd()
-        
         self.wrkdir = Path(wrkdir)
-        self.res_dir = self.wrkdir / "results"
+
+        if resdir is None:
+            self.res_dir = self.wrkdir / "results"
+        else:
+            self.res_dir = Path(resdir) / "results"
 
         # shutil.rmtree(self.res_dir)
         self.res_dir.mkdir(exist_ok=True)
+
+    def mu_mean_field(self, beta):
+        x = self.volume_fraction
+        J = 1 # mean value
+        mu = 1/beta * np.log((1-x)/x) + 4 * J * x
+        return mu
 
     def get_defining_parameters(self, part):
 
         defining_parameters = [
             ('volume_fraction', 'Vf'),
+            ('chemical_potential', 'mu'),
             ('lattice_size', 'd'),
             ('num_components', 'n'),
             ('condensation_interaction_version', 'vC'),
@@ -103,7 +148,7 @@ class LatticePhaseReact():
         return self.res_dir / (f'condensation_' + self.get_char_string('condensation'))
 
     def get_dir_reaction(self, interaction):
-        return self.res_dir / (f'reaction_' + f'interaction_{interaction:.3f}_' + self.get_char_string('reaction'))
+        return self.res_dir / (f'reaction_' + f'interaction_{interaction:.8f}_' + self.get_char_string('reaction'))
 
     def make(self, wrkdir=None):
         if wrkdir is None:
@@ -145,7 +190,7 @@ class LatticePhaseReact():
             ["g++"] + CFLAGS + DFLAGS + [self.wrkdir / "react_phase_sep.cpp"],
             capture_output=True)
 
-        if out.returncode > 0:
+        if out.returncode != 0:
             print(out)
             raise(ValueError("Something went wrong"))
 
@@ -163,17 +208,22 @@ class LatticePhaseReact():
 
         self.make(wrkdir=sim_dir)
 
-        out = subprocess.run(["./a.out",
+        cmd = ["./a.out",
             f"0",
             f"{self.volume_fraction}",
+            f"{self.chemical_potential}",
             f"{self.beta_range[0]}",
             f"{self.beta_range[-1]}",
             f"{self.beta_range.size}",
             f"{num_sim_cond}",
-            f"0"],
+            f"0",]
+
+        print(" ".join(cmd))
+
+        out = subprocess.run(cmd,
             capture_output=True)
 
-        if out.returncode > 0:
+        if out.returncode != 0:
             print(out)
             raise(ValueError("Something went wrong"))
 
@@ -193,6 +243,7 @@ class LatticePhaseReact():
         out = subprocess.run(["./a.out",
             f"{interaction}",
             f"{self.volume_fraction}",
+            f"{self.chemical_potential}",
             f"{self.beta_range[0]}",
             f"{self.beta_range[-1]}",
             f"{self.beta_range.size}",
@@ -212,7 +263,7 @@ class LatticePhaseReact():
                 self.perform_reaction_simulation(interaction, num_sim_react)
         else:
             pfun = lambda x: self.perform_reaction_simulation(x, num_sim_react)
-            Parallel(n_jobs=6) (delayed(pfun)(ir) for ir in self.interaction_range)
+            Parallel(n_jobs=6, verbose=10) (delayed(pfun)(ir) for ir in self.interaction_range)
 
     def generate_reaction_interaction(self, ver="ones", r=0.4, s=0.2):
 
@@ -257,6 +308,12 @@ class LatticePhaseReact():
             
             I[0,:] = np.random.uniform(0, s, size=(q+1))
             I[:,0] = np.random.uniform(0, s, size=(q+1))
+
+        elif ver == "rand3":
+            I = np.random.uniform(r[0]-s[0], r[0]+s[0], size=(q+1, q+1))
+            
+            I[0,:] = np.random.uniform(r[1]-s[1], r[1]+s[1], size=(q+1))
+            I[:,0] = np.random.uniform(r[1]-s[1], r[1]+s[1], size=(q+1))
 
         self.I = I
 
@@ -334,6 +391,7 @@ class LatticePhaseReact():
         sim_dir = self.get_dir_condensation()
 
         I = np.genfromtxt(sim_dir / f'I.csv')
+        # I = self.I
 
         #I[I == 0] = np.NaN
         plt.imshow(I, cmap=plt.cm.Spectral)
@@ -470,25 +528,54 @@ class LatticePhaseReact():
             self.plot_lattice(beta, ax)
             plt.title(f"beta = {beta}")
 
+    def get_lattice(self, beta):
+        sim_dir = self.get_dir_condensation()
+        f_lattice = sim_dir / f'lattice_{beta:.8f}.csv'
+        try:
+            data = np.genfromtxt(f_lattice)
+        except FileNotFoundError as E:
+           print(f_lattice)
+           raise(E)
+        return data
+
     def plot_lattice(self, beta, ax):
 
-        sim_dir = self.get_dir_condensation()
-        data = np.genfromtxt(sim_dir / f'lattice_{beta:.3f}.csv')
+        data = self.get_lattice(beta)
         data[data == 0] = np.NaN
 
         ax.imshow(data, cmap=plt.cm.Spectral, interpolation='none')
         ax.set_xticks([])
         ax.set_yticks([])
 
-    def plot_reaction_flux(self, interaction, product):
+    @functools.cache
+    def get_reaction_flux(self, interaction, product, beta):
         
         sim_dir = self.get_dir_reaction(interaction)
 
-        for j, beta in enumerate(self.beta_range):
+        data = np.genfromtxt(sim_dir / f'l_react_{beta:.8f}_{product}.csv')
+
+        # data = data - np.median(data)
+        # m = max([data.max(), -data.min()])
+
+        return data
+
+    def plot_reaction_flux(self, interaction, product, beta_range=None):
+        
+        sim_dir = self.get_dir_reaction(interaction)
+
+        if beta_range is None:
+            beta_range = self.beta_range
+
+        for j, beta in enumerate(beta_range):
 
             f, (ax1, ax2) = plt.subplots(1, 2, sharey=True)
 
-            data = np.genfromtxt(sim_dir / f'lattice_{beta:.3f}.csv')
+            f_lattice = sim_dir / f'lattice_{beta:.8f}.csv'
+            try:
+                data = np.genfromtxt(f_lattice)
+            except FileNotFoundError as E:
+                print(f_lattice)
+                raise(E)
 
             data[data == 0] = np.NaN
             #data[data != product] = 0
@@ -496,8 +583,8 @@ class LatticePhaseReact():
             ax1.imshow(data, cmap=plt.cm.Spectral, interpolation='none', resample=False)
             # ax1.title(f"{beta}")
 
-            data1 = np.genfromtxt(sim_dir / f'l_react_{beta:.3f}_{product}.csv')
-            data2 = np.genfromtxt(sim_dir / f'l_react_{beta:.3f}_{product+1}.csv')
+            data1 = self.get_reaction_flux(interaction, product, beta)
+            data2 = self.get_reaction_flux(interaction, product + 1, beta)
 
             data = data1
             # data = data2 - data1
@@ -541,3 +628,99 @@ class LatticePhaseReact():
             plt.legend()
 
         return beta_critical
+    
+def beta_critical(x):
+    X, beta = beta_critical_fun()
+    ind = np.where(x < X)[0]
+    ind = ind[0:2]
+    beta_avg = np.mean(beta[ind])
+
+    return beta_avg
+    
+
+def beta_critical_fun():
+    """
+    x/(1-x) = w*(w-1)/(exp(beta) - w)
+    
+    where w = (-b +- sqrt(b^2 - 4*exp(beta)))/2
+    where b = exp(beta) * (1-1/k) + 1 + 1/k
+    where k = 3
+    """
+    N = 100000
+
+    beta_range = np.logspace(0, 1, num=N, base=10)
+    # print(beta_range)
+
+    k = 3
+
+    x = np.full((N,2), np.NaN)
+
+    for i, beta in enumerate(beta_range):
+        c = np.exp(beta)
+        b = c * (1 - 1/k) + 1 + 1/k
+
+        if b*b - 4*c > 0:
+            wp = (b + np.sqrt(b*b - 4*c))/2
+            wm = (b - np.sqrt(b*b - 4*c))/2
+    
+            w = wm
+            g = w*(w-1)/(c - w)
+
+            x[i,0] = g / (1 + g)
+
+            w = wp
+            g = w*(w-1)/(c - w)
+
+            x[i,1] = g / (1 + g)
+
+        # x = w * (w-1) / (w**2 - np.exp(beta))
+
+    X = np.concatenate([x[:,0], x[:,1]])
+    beta = np.concatenate([beta_range, beta_range])
+
+    ind = np.isnan(X) == False
+    X = X[ind]
+    beta = beta[ind]
+
+    ind = np.argsort(X)
+    X = X[ind]
+    beta = beta[ind]
+
+    return X, beta
+
+colorscale = [
+        # Let first 10% (0.1) of the values have color rgb(0, 0, 0)
+        [0, "rgb(255, 255, 255)"],
+        [0.00001, "rgb(255, 255, 255)"],
+
+        # Let values between 10-20% of the min and max of z
+        # have color rgb(20, 20, 20)
+        [0.00002, "rgb(20, 20, 20)"],
+        [0.1, "rgb(20, 20, 20)"],
+
+        # Values between 20-30% of the min and max of z
+        # have color rgb(40, 40, 40)
+        [0.2, "rgb(40, 40, 40)"],
+        [0.3, "rgb(40, 40, 40)"],
+
+        [0.3, "rgb(60, 60, 60)"],
+        [0.4, "rgb(60, 60, 60)"],
+
+        [0.4, "rgb(80, 80, 80)"],
+        [0.5, "rgb(80, 80, 80)"],
+
+        [0.5, "rgb(100, 100, 100)"],
+        [0.6, "rgb(100, 100, 100)"],
+
+        [0.6, "rgb(120, 120, 120)"],
+        [0.7, "rgb(120, 120, 120)"],
+
+        [0.7, "rgb(140, 140, 140)"],
+        [0.8, "rgb(140, 140, 140)"],
+
+        [0.8, "rgb(160, 160, 160)"],
+        [0.9, "rgb(160, 160, 160)"],
+
+        [0.9, "rgb(180, 180, 180)"],
+        [1.0, "rgb(180, 180, 180)"]
+    ]

@@ -38,6 +38,7 @@ double J[q + 1][q + 1]; // interaction matrix
 int spin[L][L]; // lattice variables
 uint l_react[L][L][q];
 
+double mu; // chemical potential
 double volume_frac; // volume fraction of the solutes
 double interaction; // interaction between substrate and enzymes (uniform)
 
@@ -143,6 +144,66 @@ void init_lattice(const double conc)
                     spin[i][j] = k;
         }
     }
+}
+
+double metropolis(const double beta, const double mu)
+{
+    int i = int(casual() * L); // orig x
+    int j = int(casual() * L); // orig y
+    int ip = (i + 1) % L;     //      x + 1
+    int im = (L + i - 1) % L; //      x - 1
+    int jp = (j + 1) % L;     //      y + 1
+    int jm = (L + j - 1) % L; //      y - 1
+
+    double delta[q + 1];
+    double x[q + 1];
+    double P[q + 1];
+
+    // z ... partition sum
+    double z = 0.0;
+
+    // k ... "color"
+    for (int k = 0; k < q + 1; k++){
+
+        // F ... interaction energy with neighbors
+        double F = (J[k][spin[i][jm]]   // down interaction
+                  + J[k][spin[i][jp]]   // up
+                  + J[k][spin[im][j]]   // left
+                  + J[k][spin[ip][j]]); // right
+
+        delta[k] = -F;
+
+        if (k != 0){
+            delta[k] += mu;
+        }
+
+        x[k] = exp(-beta * delta[k]);
+        z += x[k];
+    }
+
+    /*
+    for (int k = 0; k < q + 1; k++){
+        cout << x[k] / z << " ";
+    }
+    cout << endl;
+    */
+    
+    // cumulative probability
+    double P_cum = 0.0;
+
+    // random number
+    double cas = casual();
+
+    for (int k = 0; k < q + 1; k++){
+        P[k] = x[k] / z;
+        P_cum += P[k];
+        if (cas < P_cum)
+        {
+            spin[i][j] = k;
+            return 0.0;
+        }
+    }
+
 }
 
 double kawasaki(const double beta)
@@ -279,14 +340,18 @@ double sweep(const double beta)
 { // sweep over all system
     double energy_change = 0;
 
-    for (int i = 0; i <= L * L - 1; i++)
-        energy_change += kawasaki(beta);
+    if (beta > 0)
+    {
 
+        for (int i = 0; i <= L * L - 1; i++)
+            //energy_change += kawasaki(beta);
+            energy_change += metropolis(beta, mu);
+    }
     energy_change = energy();
     return energy_change;
 }
 
-int time_to_react(const double F, const double interaction)
+int time_to_react(const double F, const double interaction, const int react_counter)
 {
     /* simulating a substrate entering and reacting,
     it returns the total time to go through the pathway,
@@ -307,6 +372,9 @@ int time_to_react(const double F, const double interaction)
 
         if (spin[pos[0]][pos[1]] == counter + 1)
         {
+            // if counter < 5)
+            //     l_react[pos[0]][pos[1]][counter] / react_counter
+
             counter++;
             //if (casual() < 1. / exp(1))
             //    counter++;
@@ -403,7 +471,7 @@ int time_to_react(const double F, const double interaction)
 void load_lattice(const double beta)
 {
     char fname[64];
-    sprintf(fname, "lattice_%.3f.csv", beta);
+    sprintf(fname, "lattice_%.8f.csv", beta);
 
     ifstream infile(fname);
 
@@ -419,7 +487,7 @@ void load_lattice(const double beta)
 void save_lattice(const double beta)
 {
     char fname[64];
-    sprintf(fname, "lattice_%.3f.csv", beta);
+    sprintf(fname, "lattice_%.8f.csv", beta);
 
     ofstream fout;
     fout.open(fname);
@@ -440,7 +508,7 @@ void save_l_react(const double beta)
     for (int k = 0; k < q; k++)
     {
         char fname[64];
-        sprintf(fname, "l_react_%.3f_%d.csv", beta, k);
+        sprintf(fname, "l_react_%.8f_%d.csv", beta, k);
 
         ofstream fout;
         fout.open(fname);
@@ -544,7 +612,7 @@ void reaction(vector<double> &beta, const int sim_react)
         for (int i = 0; i < sim_react; i++)
         {
             // simulate the pathway
-            tempo[i] = time_to_react(interaction * b, interaction);
+            tempo[i] = time_to_react(interaction * b, interaction, i);
         }
 
         sprintf(fname, "reaction_tempo.csv");
@@ -566,11 +634,12 @@ void condensation(vector<double> &beta, const int sim_cond)
     for (int j = 0; j < beta.size(); j++)
     {
         double b = beta[j];
-        // cout << b << " " << endl;
+        cout << b << " " << endl;
 
         for (int i = 0; i < sim_cond; i++)
         {
             // simulate the condensation
+            
             cond_energy[i] = sweep(b);
         }
 
@@ -643,26 +712,30 @@ int main(int argc, char **argv)
     volume_frac = 0.3;
     if (argc > 2)
         volume_frac = atof(argv[2]);
+    
+    mu = 1;
+    if (argc > 3)
+        mu = atof(argv[3]);
 
     double betamin = 0;
-    if (argc > 3)
-        betamin = atof(argv[3]);
+    if (argc > 4)
+        betamin = atof(argv[4]);
 
     double betamax = 10;
-    if (argc > 4)
-        betamax = atof(argv[4]);
+    if (argc > 5)
+        betamax = atof(argv[5]);
 
     int betanum = 100;
-    if (argc > 5)
-        betanum = atoi(argv[5]);
+    if (argc > 6)
+        betanum = atoi(argv[6]);
 
     int sim_cond = 1000;
-    if (argc > 6)
-        sim_cond = atoi(argv[6]);
+    if (argc > 7)
+        sim_cond = atoi(argv[7]);
 
     int sim_react = 1000;
-    if (argc > 7)
-        sim_react = atoi(argv[7]);
+    if (argc > 8)
+        sim_react = atoi(argv[8]);
 
     return core(betamin, betamax, betanum, sim_cond, sim_react);
 }
