@@ -11,6 +11,8 @@ from joblib import Parallel, delayed
 import itertools
 import functools
 import scipy.optimize
+import hashlib
+import pprint
 
 import subprocess
 import shutil
@@ -70,30 +72,63 @@ def find_nearest(a, a0):
     idx = np.abs(a - a0).argmin()
     return a.flat[idx]
 
+def mu_mean_field(volume_fraction, beta):
+    x = volume_fraction
+    J = 1 # mean value
+    mu = 1/beta * np.log((1-x)/x) + 4 * J * x
+    return mu
+
 class LatticePhaseReact():
     def __init__(
         self,
-        volume_fraction=0.3,
-        chemical_potential=1.6,
-        beta_range=None,
-        beta_num=100,
+        
         interaction_range=np.linspace(0, 1, 6),
         num_components=20,
         lattice_size=100,
-        extended_neighborhood=True,
+        volume_fraction=0.3,
+        
+        nt=100,
+        chemical_potential=1.6,
+        chemical_potential_pathway=None,
+        alpha=1,
+        alpha_pathway=None,
+        beta=1,
+        beta_pathway=None,
+        
+        extended_neighborhood=False,
         log_concentration=False,
+
         resdir=None,
         wrkdir=None):
 
         self.interaction_range = interaction_range
         self.volume_fraction = volume_fraction
-        self.chemical_potential = chemical_potential
 
-        if beta_range is None:
-            bc_estimate = beta_critical(self.volume_fraction)
-            beta_range = np.linspace(0, 2*bc_estimate, beta_num)
+        if alpha_pathway is None:
+            self.alpha_pathway = np.full(nt, alpha)
+        else:
+            assert alpha_pathway.size == nt
+            self.alpha_pathway = np.copy(alpha_pathway)
 
-        self.beta_range = beta_range
+        if beta_pathway is None:
+            self.beta_pathway = np.full(nt, beta)
+        else:
+            assert beta_pathway.size == nt
+            self.beta_pathway = np.copy(beta_pathway)
+
+        self.beta_pathway.flags.writeable= False
+
+        if chemical_potential_pathway is None:
+            self.chemical_potential_pathway = np.full(nt, chemical_potential)
+        else:
+            assert chemical_potential_pathway.size == nt
+            self.chemical_potential_pathway = np.copy(chemical_potential_pathway)
+
+        self.chemical_potential_pathway.flags.writeable = False
+
+        # if beta_pathway is None:
+        #     bc_estimate = beta_critical(self.volume_fraction)
+        #     beta_pathway = np.linspace(0, 2*bc_estimate, beta_num)
 
         self.num_components = num_components
         self.lattice_size = lattice_size
@@ -116,17 +151,10 @@ class LatticePhaseReact():
         # shutil.rmtree(self.res_dir)
         self.res_dir.mkdir(exist_ok=True)
 
-    def mu_mean_field(self, beta):
-        x = self.volume_fraction
-        J = 1 # mean value
-        mu = 1/beta * np.log((1-x)/x) + 4 * J * x
-        return mu
-
     def get_defining_parameters(self, part):
 
         defining_parameters = [
             ('volume_fraction', 'Vf'),
-            ('chemical_potential', 'mu'),
             ('lattice_size', 'd'),
             ('num_components', 'n'),
             ('condensation_interaction_version', 'vC'),
@@ -138,17 +166,32 @@ class LatticePhaseReact():
 
         return defining_parameters
 
+    def get_patwhay_hash(self):
+
+        hashfun = lambda a: hashlib.blake2b(a, digest_size=8, usedforsecurity=False)
+        
+        s = ""
+        s += hashfun(self.beta_pathway.tostring()).hexdigest()
+        s += hashfun(self.chemical_potential_pathway.tostring()).hexdigest()
+
+        return s
+
     def get_char_string(self, part):
         s = ""
         for (p, n) in self.get_defining_parameters(part):
             s += f"{n}_{getattr(self, p)}"
+
         return s
 
     def get_dir_condensation(self):
-        return self.res_dir / (f'condensation_' + self.get_char_string('condensation'))
+        return (self.res_dir 
+                / (f'condensation_' + self.get_char_string('condensation'))
+                / self.get_patwhay_hash())
 
     def get_dir_reaction(self, interaction):
-        return self.res_dir / (f'reaction_' + f'interaction_{interaction:.8f}_' + self.get_char_string('reaction'))
+        return (self.res_dir
+                / (f'reaction_' + f'interaction_{interaction:.8f}_' + self.get_char_string('reaction'))
+                / self.get_patwhay_hash())
 
     def make(self, wrkdir=None):
         if wrkdir is None:
@@ -191,7 +234,8 @@ class LatticePhaseReact():
             capture_output=True)
 
         if out.returncode != 0:
-            print(out)
+            print(out.stdout.decode("utf-8"))
+            print(out.stderr.decode("utf-8"))
             raise(ValueError("Something went wrong"))
 
     def simulate_condensation(self, num_sim_cond=1000):
@@ -200,21 +244,20 @@ class LatticePhaseReact():
         
         if sim_dir.exists():
             shutil.rmtree(sim_dir)
-        sim_dir.mkdir(exist_ok=True)
+        sim_dir.mkdir(exist_ok=True, parents=True)
         
         os.chdir(sim_dir)
+        print(sim_dir)
 
         self.save_condensate_interaction_matrix()
 
         self.make(wrkdir=sim_dir)
 
+        self.save_sweep()
+
         cmd = ["./a.out",
             f"0",
             f"{self.volume_fraction}",
-            f"{self.chemical_potential}",
-            f"{self.beta_range[0]}",
-            f"{self.beta_range[-1]}",
-            f"{self.beta_range.size}",
             f"{num_sim_cond}",
             f"0",]
 
@@ -224,7 +267,8 @@ class LatticePhaseReact():
             capture_output=True)
 
         if out.returncode != 0:
-            print(out)
+            print(out.stdout.decode("utf-8"))
+            print(out.stderr.decode("utf-8"))
             raise(ValueError("Something went wrong"))
 
     def perform_reaction_simulation(self, interaction, num_sim_react):
@@ -234,7 +278,7 @@ class LatticePhaseReact():
         
         if sim_dir.exists():
             shutil.rmtree(sim_dir)
-        sim_dir.mkdir(exist_ok=True)
+        sim_dir.mkdir(exist_ok=True, parents=True)
         
         shutil.copytree(cond_sim_dir, sim_dir, dirs_exist_ok=True)
 
@@ -243,10 +287,6 @@ class LatticePhaseReact():
         out = subprocess.run(["./a.out",
             f"{interaction}",
             f"{self.volume_fraction}",
-            f"{self.chemical_potential}",
-            f"{self.beta_range[0]}",
-            f"{self.beta_range[-1]}",
-            f"{self.beta_range.size}",
             f"0",
             f"{num_sim_react}"],
             capture_output=True)
@@ -264,6 +304,13 @@ class LatticePhaseReact():
         else:
             pfun = lambda x: self.perform_reaction_simulation(x, num_sim_react)
             Parallel(n_jobs=6, verbose=10) (delayed(pfun)(ir) for ir in self.interaction_range)
+
+    def save_sweep(self):
+        sim_dir = self.get_dir_condensation()
+
+        np.savetxt(sim_dir / "sweep_alpha.csv", self.alpha_pathway, fmt='%f')
+        np.savetxt(sim_dir / "sweep_beta.csv", self.beta_pathway, fmt='%f')
+        np.savetxt(sim_dir / "sweep_mu.csv", self.chemical_potential_pathway, fmt='%f')
 
     def generate_reaction_interaction(self, ver="ones", r=0.4, s=0.2):
 
@@ -434,7 +481,7 @@ class LatticePhaseReact():
             y = np.mean(data, axis=1)
             e = np.std(data, axis=1) / np.sqrt(data.shape[1])
 
-            x = self.beta_range[:y.size]
+            x = self.beta_pathway[:y.size]
 
             # print(x.shape)
             # print(y.shape)
@@ -461,7 +508,7 @@ class LatticePhaseReact():
             data = np.genfromtxt(sim_dir / f'reaction_tempo.csv')
 
             y = np.std(data, axis=1)
-            x = self.beta_range[:y.size]
+            x = self.beta_pathway[:y.size]
 
             plt.plot(x, y, color=colors[i])
             plt.xlabel("beta ~ organization")
@@ -479,11 +526,11 @@ class LatticePhaseReact():
 
         sim_dir = self.get_dir_condensation()
 
-        E = np.zeros(self.beta_range.size)
+        E = np.zeros(self.beta_pathway.size)
 
         data = np.genfromtxt(sim_dir / f'cond_energy.csv')
 
-        for j, beta in enumerate(self.beta_range):
+        for j, beta in enumerate(self.beta_pathway):
 
             E[j] = np.mean(data[j,:])
             
@@ -491,18 +538,18 @@ class LatticePhaseReact():
 
     def plot_condensation_convergence(self):
 
-        colors = plt.cm.Spectral(np.linspace(0, 1, self.beta_range.size))
+        colors = plt.cm.Spectral(np.linspace(0, 1, self.beta_pathway.size))
 
         sim_dir = self.get_dir_condensation()
 
         plt.figure()
 
-        E = np.zeros(self.beta_range.size)
+        E = np.zeros(self.beta_pathway.size)
 
         data = np.genfromtxt(sim_dir / f'cond_energy.csv')
         #print(data.shape)
 
-        for j, beta in enumerate(self.beta_range):
+        for j, beta in enumerate(self.beta_pathway):
 
             E[j] = np.mean(data[j,:])
 
@@ -511,26 +558,26 @@ class LatticePhaseReact():
         plt.xlabel("step")
         plt.ylabel("energy")
 
-        sm = plt.cm.ScalarMappable(cmap=plt.cm.Spectral, norm=matplotlib.colors.Normalize(vmin=min(self.beta_range), vmax=max(self.beta_range)))
+        sm = plt.cm.ScalarMappable(cmap=plt.cm.Spectral, norm=matplotlib.colors.Normalize(vmin=min(self.beta_pathway), vmax=max(self.beta_pathway)))
         cbar = plt.colorbar(sm)
         cbar.ax.set_ylabel("beta")
 
         plt.figure()
-        plt.plot(self.beta_range, E)
+        plt.plot(self.beta_pathway, E)
         plt.xlabel("beta")
         plt.ylabel("mean energy")
 
     def plot_condensation(self):
 
-        for j, beta in enumerate(self.beta_range):
+        for j, beta in enumerate(self.beta_pathway):
             plt.figure()
             ax = plt.gca()
             self.plot_lattice(beta, ax)
             plt.title(f"beta = {beta}")
 
-    def get_lattice(self, beta):
+    def get_lattice(self, t_index):
         sim_dir = self.get_dir_condensation()
-        f_lattice = sim_dir / f'lattice_{beta:.8f}.csv'
+        f_lattice = sim_dir / f'lattice_{t_index:d}.csv'
         try:
             data = np.genfromtxt(f_lattice)
         except FileNotFoundError as E:
@@ -548,6 +595,14 @@ class LatticePhaseReact():
         ax.set_yticks([])
 
     @functools.cache
+    def get_substrate(self, product, t_index):
+        sim_dir = self.get_dir_condensation()
+
+        data = np.genfromtxt(sim_dir / f'substrate_{t_index:d}_{product}')
+
+        return data
+
+    @functools.cache
     def get_reaction_flux(self, interaction, product, beta):
         
         sim_dir = self.get_dir_reaction(interaction)
@@ -559,18 +614,18 @@ class LatticePhaseReact():
 
         return data
 
-    def plot_reaction_flux(self, interaction, product, beta_range=None):
+    def plot_reaction_flux(self, interaction, product, beta_pathway=None):
         
         sim_dir = self.get_dir_reaction(interaction)
 
-        if beta_range is None:
-            beta_range = self.beta_range
+        if beta_pathway is None:
+            beta_pathway = self.beta_pathway
 
-        for j, beta in enumerate(beta_range):
+        for j, beta in enumerate(beta_pathway):
 
             f, (ax1, ax2) = plt.subplots(1, 2, sharey=True)
 
-            f_lattice = sim_dir / f'lattice_{beta:.8f}.csv'
+            f_lattice = sim_dir / f'lattice_{j:d}.csv'
             try:
                 data = np.genfromtxt(f_lattice)
             except FileNotFoundError as E:
@@ -591,7 +646,7 @@ class LatticePhaseReact():
 
             #data = data - np.median(data)
             #m = max([data.max(), -data.min()])
-            d = data.copy();
+            d = data.copy()
             data[data == 0] = np.NaN
 
             ax2.imshow(data, 
@@ -607,7 +662,7 @@ class LatticePhaseReact():
         def func(x, a, b, c, d, e):
             return a*x + d*(0.5 + np.arctan(b*(x-c))/np.pi) + e
 
-        xdata = self.beta_range
+        xdata = self.beta_pathway
         ydata = E / min(E)
 
         popt, pcov = scipy.optimize.curve_fit(func, xdata, ydata,
@@ -648,14 +703,14 @@ def beta_critical_fun():
     """
     N = 100000
 
-    beta_range = np.logspace(0, 1, num=N, base=10)
-    # print(beta_range)
+    beta_pathway = np.logspace(0, 1, num=N, base=10)
+    # print(beta_pathway)
 
     k = 3
 
     x = np.full((N,2), np.NaN)
 
-    for i, beta in enumerate(beta_range):
+    for i, beta in enumerate(beta_pathway):
         c = np.exp(beta)
         b = c * (1 - 1/k) + 1 + 1/k
 
@@ -676,7 +731,7 @@ def beta_critical_fun():
         # x = w * (w-1) / (w**2 - np.exp(beta))
 
     X = np.concatenate([x[:,0], x[:,1]])
-    beta = np.concatenate([beta_range, beta_range])
+    beta = np.concatenate([beta_pathway, beta_pathway])
 
     ind = np.isnan(X) == False
     X = X[ind]

@@ -5,6 +5,7 @@
 #include "fstream"
 #include "vector"
 #include "string"
+#include "assert.h"
 
 using namespace std;
 
@@ -18,6 +19,10 @@ using namespace std;
 
 #ifndef EXTENDED_NEIGHBORHOOD
 #define EXTENDED_NEIGHBORHOOD true
+#endif
+
+#ifndef OPEN_SYSTEM
+#define OPEN_SYSTEM false
 #endif
 
 #ifndef LATTICE_SIZE
@@ -36,9 +41,9 @@ double I[q + 1][q + 1]; // interaction matrix
 double J[q + 1][q + 1]; // interaction matrix
 
 int spin[L][L]; // lattice variables
-uint l_react[L][L][q];
+int substrate[q + 1][L][L];
+uint l_react[q + 1][L][L];
 
-double mu; // chemical potential
 double volume_frac; // volume fraction of the solutes
 double interaction; // interaction between substrate and enzymes (uniform)
 
@@ -180,13 +185,6 @@ double metropolis(const double beta, const double mu)
         x[k] = exp(-beta * delta[k]);
         z += x[k];
     }
-
-    /*
-    for (int k = 0; k < q + 1; k++){
-        cout << x[k] / z << " ";
-    }
-    cout << endl;
-    */
     
     // cumulative probability
     double P_cum = 0.0;
@@ -336,16 +334,203 @@ double energy()
     return -e;
 }
 
-double sweep(const double beta)
-{ // sweep over all system
+void diffusion_reaction(const double beta)
+{
+    int i = int(casual() * L); // orig x
+    int j = int(casual() * L); // orig y
+
+    int ip = (i + 1) % L;     //      x + 1
+    int im = (L + i - 1) % L; //      x - 1
+    int jp = (j + 1) % L;     //      y + 1
+    int jm = (L + j - 1) % L; //      y - 1
+
+    int pos[5][2];
+
+    pos[0][0] = i;
+    pos[0][1] = j;
+
+    pos[1][0] = i;
+    pos[1][1] = jm;
+
+    pos[2][0] = i;
+    pos[2][1] = jp;
+
+    pos[3][0] = im;
+    pos[3][1] = j;
+
+    pos[4][0] = ip;
+    pos[4][1] = j;
+
+
+    int cat = spin[i][j];
+    if (cat > 0){
+        // reaction
+        substrate[cat][i][j] += substrate[cat - 1][i][j];
+        substrate[cat - 1][i][j] = 0;
+    }
+
+    double delta[5];
+    double x[5];
+    double P[5];
+
+    for (int s = 0; s < q + 1; s++)
+    {
+        // z ... partition sum
+        double z = 0.0;
+
+        delta[0] = I[s][spin[i][j]];
+        delta[1] = I[s][spin[i][jm]]; // down interaction
+        delta[2] = I[s][spin[i][jp]]; // up
+        delta[3] = I[s][spin[im][j]]; // left
+        delta[4] = I[s][spin[ip][j]]; // right
+
+        
+        for (int k = 0; k < 5; k ++)
+        {
+            delta[k] = - I[s][spin[pos[k][0]][pos[k][1]]];
+
+            x[k] = exp(-beta * interaction * delta[k]);
+            z += x[k];
+        }
+        
+        for (int l = 0; l < substrate[s][i][j]; l++)
+        {
+
+            // cumulative probability
+            double P_cum = 0.0;
+
+            // random number
+            double cas = casual();
+
+            int kk = 0;
+
+            for (int k = 0; k < q + 1; k++){
+                P[k] = x[k] / z;
+                P_cum += P[k];
+                if (cas < P_cum)
+                {
+                    kk = k;
+                    break;
+                }
+            }
+
+            substrate[s][i][j] --;
+            substrate[s][pos[kk][0]][pos[kk][1]] ++;
+        }
+    }
+}
+
+void product_to_solvent(const int num_convert)
+{
+    int i = int(casual() * L);
+    int j = int(casual() * L);
+
+    if (substrate[q][i][j] >= num_convert){
+        substrate[q][i][j] -= num_convert;
+
+        int cat = spin[i][j];
+
+        spin[i][j] = 0;
+
+        if (cat > 0){
+            while (true)
+            {
+                int k = int(casual() * L); // orig x
+                int l = int(casual() * L); // orig y
+
+                if (spin[k][l] == 0)
+                {
+                    double dx = abs(i - k);
+                    double dy = abs(j - l);
+
+                    dx = min(dx, abs(dx - L));
+                    dy = min(dy, abs(dy - L));
+
+                    double dist = sqrt(dx*dx + dy*dy);
+                    dist = dist * sqrt(2) / L;
+
+                    double p = (1 - dist);
+                    p = p * p;
+
+                    if (casual() < p){
+                        spin[k][l] = cat;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+}
+
+void bulk_diffusion(const double alpha)
+{
+    // bulk diffusion only with initial substrate
+
+    int i = int(casual() * L);
+    int j = int(casual() * L);
+
+    double a = 1;
+    double b = 0.1;
+
+    int C = substrate[0][i][j];
+    double dC = alpha * a - b * C;
+
+    if (dC > 0)
+    {
+        C += floor(dC);
+        dC -= floor(dC);
+    }
+    else
+    {
+        C += ceil(dC);
+        dC -= ceil(dC);
+    }
+
+    if (C > 0){
+        if (casual() < dC){
+            C--;
+        }
+    }
+
+    substrate[0][i][j] = C;
+}
+
+
+double sweep(
+    const double beta,
+    const double mu, 
+    const double alpha)
+{    
     double energy_change = 0;
+
+    int K = 10;
+
+    double scale = 1;
+
+    int num_convert = 10 * scale;
 
     if (beta > 0)
     {
+        for (int i = 0; i < L * L; i++)
+        {
+            if (OPEN_SYSTEM)
+                energy_change += metropolis(beta, mu);
+            else
+                energy_change += kawasaki(beta);
 
-        for (int i = 0; i <= L * L - 1; i++)
-            //energy_change += kawasaki(beta);
-            energy_change += metropolis(beta, mu);
+            bulk_diffusion(alpha * scale);
+
+            for (int k = 0; k <= K; k++)
+            {
+                diffusion_reaction(beta);
+
+                for (int j = 0; j <= 100; j++)
+                {
+                    product_to_solvent(num_convert);
+                }
+            }
+        }
     }
     energy_change = energy();
     return energy_change;
@@ -395,18 +580,6 @@ int time_to_react(const double F, const double interaction, const int react_coun
             newpos[0] = pos[0];
             newpos[1] = pos[1] + s;
         }
-
-        // old version - wrong
-        // if (casual() < 0.5)
-        //     newpos[0] = pos[0] + 1;
-        // else
-        //     newpos[0] = pos[0] - 1;
-
-        // if (casual() < 0.5)
-        //     newpos[1] = pos[1] + 1;
-        // else
-        //     newpos[1] = pos[1] - 1;
-
 
         // periodic boundary
         if (newpos[0] < 0)
@@ -484,10 +657,10 @@ void load_lattice(const double beta)
     }
 }
 
-void save_lattice(const double beta)
+void save_lattice(const int t_index)
 {
     char fname[64];
-    sprintf(fname, "lattice_%.8f.csv", beta);
+    sprintf(fname, "lattice_%d.csv", t_index);
 
     ofstream fout;
     fout.open(fname);
@@ -503,12 +676,12 @@ void save_lattice(const double beta)
     fout.close();
 }
 
-void save_l_react(const double beta)
+void save_l_react(const int t)
 {
-    for (int k = 0; k < q; k++)
+    for (int k = 0; k < q + 1; k++)
     {
         char fname[64];
-        sprintf(fname, "l_react_%.8f_%d.csv", beta, k);
+        sprintf(fname, "l_react_%d_%d.csv", t, k);
 
         ofstream fout;
         fout.open(fname);
@@ -524,6 +697,40 @@ void save_l_react(const double beta)
         fout.close();
     }
 }
+
+
+void load_sweep_vars(
+    vector<double> &alpha,
+    vector<double> &beta,
+    vector<double> &mu)
+{
+    double v;
+    
+    ifstream f0("sweep_alpha.csv");
+    if (f0.is_open()) {
+        while (f0.good()) {
+            f0 >> v;
+            alpha.push_back(v);
+        }
+    }
+
+    ifstream f1("sweep_beta.csv");
+    if (f1.is_open()) {
+        while (f1.good()) {
+            f1 >> v;
+            beta.push_back(v);
+        }
+    }
+
+    ifstream f2("sweep_mu.csv");
+    if (f2.is_open()) {
+        while (f2.good()) {
+            f2 >> v;
+            mu.push_back(v);
+        }
+    }
+}
+
 
 void load_interaction()
 {
@@ -591,7 +798,36 @@ void save_vector(const vector<double> &arr, char *fname)
     fout.close();
 }
 
-void reaction(vector<double> &beta, const int sim_react)
+void serialize_lattice_array(
+    const int arr[][L][L],
+    const int size,
+    char *fbase)
+{
+    for (int k = 0; k < size; k++)
+    {
+        ofstream fout;
+
+        char fname[64];
+        sprintf(fname, "%s_%d", fbase, k);
+
+        fout.open(fname, ios_base::app);
+
+        for (int i = 0; i < L; i++)
+        {
+            for (int j = 0; j < L; j++)
+            {
+                fout << arr[k][i][j] << " ";
+            }
+            fout << endl;
+        }
+        fout.close();
+    }
+}
+
+void reaction(
+    vector<double> &beta,
+    vector<double> &mu,
+    const int sim_react)
 {
     vector<int> tempo(sim_react);
 
@@ -601,14 +837,13 @@ void reaction(vector<double> &beta, const int sim_react)
     {
         double b = beta[j];
 
-        load_lattice(b);
+        load_lattice(j);
 
         for (int i = 0; i < L; i++)
             for (int j = 0; j < L; j++)
                 for (int k = 0; k < q; k++)
                     l_react[i][j][k] = 0;
 
-        // cout << b << " " << endl;
         for (int i = 0; i < sim_react; i++)
         {
             // simulate the pathway
@@ -623,50 +858,43 @@ void reaction(vector<double> &beta, const int sim_react)
     }
 }
 
-void condensation(vector<double> &beta, const int sim_cond)
+void condensation(
+    vector<double> &alpha,
+    vector<double> &beta,
+    vector<double> &mu,
+    const int sim_cond)
 {
     vector<double> cond_energy(sim_cond);
 
     char fname[64];
+    
+    assert (beta.size() == mu.size());
+    assert (beta.size() == alpha.size());
 
-    // save_lattice(0.0);
-
-    for (int j = 0; j < beta.size(); j++)
+    for (int it = 0; it < beta.size(); it++)
     {
-        double b = beta[j];
-        cout << b << " " << endl;
+        double a = alpha[it];
+        double b = beta[it];
+        double m = mu[it];
 
         for (int i = 0; i < sim_cond; i++)
         {
-            // simulate the condensation
-            
-            cond_energy[i] = sweep(b);
+            // simulate the condensation            
+            cond_energy[i] = sweep(b, m, a);
         }
 
-        save_lattice(b);
+        //save_substrate(it);
+        save_lattice(it);
+
+        sprintf(fname, "substrate_%d", it);
+        serialize_lattice_array(substrate, q + 1, fname);
 
         sprintf(fname, "cond_energy.csv");
         save_vector(cond_energy, fname);
     }
 }
 
-void init_beta(
-    vector<double> &beta,
-    const double betamin,
-    const double betamax,
-    const int betanum)
-{
-    for (int i = 0; i < betanum; i++)
-    {
-        double b = betamin + (betamax - betamin) * double(i) / double(betanum - 1); // inverse temperature (cooling)
-        beta.push_back(b);
-    }
-}
-
 int core(
-    const double betamin,
-    const double betamax,
-    const int betanum,
     const int sim_cond,
     const int sim_react)
 {
@@ -687,17 +915,20 @@ int core(
         save_interaction();
     }
 
+    vector<double> alpha;
     vector<double> beta;
-    init_beta(beta, betamin, betamax, betanum);
+    vector<double> mu;
+    
+    load_sweep_vars(alpha, beta, mu);
 
     if (sim_cond > 0)
     {
-        condensation(beta, sim_cond);
+        condensation(alpha, beta, mu, sim_cond);
     }
 
     if (sim_react > 0)
     {
-        reaction(beta, sim_react);
+        reaction(beta, mu, sim_react);
     }
 
     return 0;
@@ -705,37 +936,27 @@ int core(
 
 int main(int argc, char **argv)
 {
+    int i = 0;
+
+    i++;
     interaction = 1;
-    if (argc > 1)
-        interaction = atof(argv[1]);
+    if (argc > i)
+        interaction = atof(argv[i]);
 
+    i++;
     volume_frac = 0.3;
-    if (argc > 2)
-        volume_frac = atof(argv[2]);
-    
-    mu = 1;
-    if (argc > 3)
-        mu = atof(argv[3]);
+    if (argc > i)
+        volume_frac = atof(argv[i]);
 
-    double betamin = 0;
-    if (argc > 4)
-        betamin = atof(argv[4]);
-
-    double betamax = 10;
-    if (argc > 5)
-        betamax = atof(argv[5]);
-
-    int betanum = 100;
-    if (argc > 6)
-        betanum = atoi(argv[6]);
-
+    i++;
     int sim_cond = 1000;
-    if (argc > 7)
-        sim_cond = atoi(argv[7]);
+    if (argc > i)
+        sim_cond = atoi(argv[i]);
 
+    i++;
     int sim_react = 1000;
-    if (argc > 8)
-        sim_react = atoi(argv[8]);
+    if (argc > i)
+        sim_react = atoi(argv[i]);
 
-    return core(betamin, betamax, betanum, sim_cond, sim_react);
+    return core(sim_cond, sim_react);
 }
