@@ -13,21 +13,15 @@
 #endif
 
 // USAGE
-// g++ BP_fit.cpp -O3
-// ./a.out /path_to/mixed_atp.dat /path_to//mixed_atp.dat lp l0 lm Jp Jm Jpm J0 J0p J0m scale_x scale_y
+// make or g++ main.cpp -O3 -std=c++17 -o turb_fit
+// ./a.out path_to/ph_sep_atp.dat path_to/mixed_atp.dat grid_data optimize scale scale lp lm l0 Jp Jm Jpm J0 J0p J0m
 
 using namespace std;
 
 bool gnuplot_out = false;
 bool err_out = true;
 
-const int N = 200; // grid size NxN
 double Hess[2][2];
-
-double CP[N];
-double CM[N];
-double HH[2][N][N];
-bool phase_sep[N][N];
 
 // polymer length "degeneracies"
 double lp;
@@ -47,7 +41,7 @@ double J0m;
 double scale_x;
 double scale_y;
 
-double z = 4; // lattice connectivity
+double z = 6; // lattice connectivity
 double dt = 0.1;
 // double dt = 0.5;
 // double dt = 1.0;
@@ -57,20 +51,13 @@ double tol = 1e-8;
 char *f_exp_ph_sep; //= 'exp/ph_sep_atp.dat';
 char *f_exp_mixed;  //= 'exp/mixed_atp.dat';
 
-const bool warm_start = true;
-// const bool warm_start = false;
+// const bool warm_start = true;
+const bool warm_start = false;
 
 double uniform(const double a, const double b)
 { // a random number uniform in (a, b)
     return a + b * double(random()) / (RAND_MAX + 1.0);
 }
-
-
-
-// double mp_ = 0.0;
-// double mm_ = 0.0;
-// double xp_ = 0.0;
-// double xm_ = 0.0;
 
 vector<double> mp_;
 vector<double> mm_;
@@ -212,18 +199,15 @@ void hess_set(
 
         double trace = Hess[0][0] + Hess[1][1];
         double deter = Hess[0][0] * Hess[1][1] - pow(0.5 * Hess[0][1] + 0.5 * Hess[1][0], 2);
-        if (trace > 0 && deter > 0)
+
+        if (trace > 0 && deter > 0) // if positive definite (stable)
         {
             sep[i] = false;
-            // cout << CM[i] << "  " << CP[j] << endl; // write if positive definite (stable)
         }
         else
         {
             sep[i] = true;
         }
-
-        //sep[i] = double(random()) / (RAND_MAX + 1.0) > 0.5;
-        //cout << "a";
     }
 }
 
@@ -278,7 +262,7 @@ void load_exp_data(
     }
 }
 
-void load_mock_data(
+void load_use_grid_data(
     vector<double> &cp,
     vector<double> &cm,
     vector<bool> &sep,
@@ -322,10 +306,10 @@ struct Mem
     vector<bool> boundary;
 };
 
-void init_set(Data &data, Mem &mem, const bool mock_data)
+void init_set(Data &data, Mem &mem, const bool use_grid_data)
 {
-    if (mock_data)
-        load_mock_data(data.x, data.y, data.sep_exp, 200);
+    if (use_grid_data)
+        load_use_grid_data(data.x, data.y, data.sep_exp, 256);
     else
         load_exp_data(data.x, data.y, data.sep_exp);
 
@@ -333,26 +317,23 @@ void init_set(Data &data, Mem &mem, const bool mock_data)
 
     for (int i = 0; i < n; i++)
     {
-        // data.x[i] *= scale_x;
-        //data.y[i] *= scale_y;
-
-        if (data.x[i] + data.y[i] > 1)
+        if (data.x[i] * scale_x  + data.y[i] * scale_y > 1)
         {
-            //cout << data.x[i] << " + " << data.y[i] << " > 1" << endl;
-            //throw std::runtime_error("cp + cm > 1");
+            cout << data.x[i] * scale_x << " + " << data.y[i] * scale_y << " > 1" << endl;
+            throw std::runtime_error("cp + cm > 1");
         }
     }
 
     auto [min_x, max_x] = std::minmax_element(begin(data.x), end(data.x));
     if (DEBUG)
     {
-        cout << "# x: [" << *min_x << ","<< *max_x << "]" << endl;
+        cout << "# x: [" << *min_x << "," << *max_x << "]" << endl;
     }
 
     auto [min_y, max_y] = std::minmax_element(begin(data.y), end(data.y));
     if (DEBUG)
     {
-        cout << "# y: [" << *min_y << ","<< *max_y << "]" << endl;
+        cout << "# y: [" << *min_y << "," << *max_y << "]" << endl;
     }
 
     for (int i = 0; i < n; i++)
@@ -372,10 +353,9 @@ void init_set(Data &data, Mem &mem, const bool mock_data)
         mm_.push_back(0);
         xp_.push_back(0);
         xm_.push_back(0);
-
     }
 
-        for (int i = 0; i < n; i++)
+    for (int i = 0; i < n; i++)
     {
         if (data.x[i] < min_x[0] + 1e-5)
         {
@@ -397,15 +377,12 @@ void init_set(Data &data, Mem &mem, const bool mock_data)
         {
             mem.boundary.push_back(false);
         }
-        
     }
 }
 double core_set(Data &data, Mem &mem)
 {
-    // cout << Jpm << " ";
-
-    double dx = 1e-6;// * scale_x;
-    double dy = 1e-6;// * scale_y;
+    double dx = 1e-6; // * scale_x;
+    double dy = 1e-6; // * scale_y;
 
     bp_set(0, 0, data.x, data.y, mem.hx_xy, mem.hy_xy);
     bp_set(0, dy, data.x, data.y, mem.hx_xyp, mem.hy_xyp);
@@ -430,7 +407,6 @@ double core_set(Data &data, Mem &mem)
                 fout_0 << data.x[i] << " " << data.y[i] << endl;
             else
                 fout_1 << data.x[i] << " " << data.y[i] << endl;
-            
         }
         fout_0.close();
         fout_1.close();
@@ -438,14 +414,14 @@ double core_set(Data &data, Mem &mem)
 
     if (err_out)
     {
-        
+
         // assert(data.sep.size() == data.sep_exp.size());
 
         double err = 0;
         bool all_sep = true;
         bool all_mix = true;
         bool all_sep_wrong = true;
-        
+
         for (int i = 0; i < data.sep.size(); i++)
         {
             if (data.sep[i] == true)
@@ -475,7 +451,7 @@ double core_set(Data &data, Mem &mem)
         }
         if (all_sep || all_mix || all_sep_wrong)
         {
-            err =  1.0;
+            err = 1.0;
         }
         else
         {
@@ -501,167 +477,17 @@ double core_set(Data &data, Mem &mem)
     return 0;
 }
 
-void sweep()
+void optimize(Data &data, Mem &mem, const int num_optimize)
 {
-
-    int NN = 10;
-
-    Data data;
-    Mem mem;
-
-    init_set(data, mem, 0);
-
-    for (int i = 0; i < NN; i++)
-    {
-
-        Jpm = 1.0 + 10.0 * double(i) / NN;
-
-        core_set(data, mem);
-    }
-}
-
-int main(int argc, char **argv)
-{
-    srand(time(0));
-
-    int i = 0;
-
-    i++;
-    f_exp_ph_sep = argv[i];
-
-    i++;
-    f_exp_mixed = argv[i];
-
-    // cout << f_exp_ph_sep;
-    // cout << f_exp_mixed;
-
-    i++;
-    bool mock_data = 0;
-    if (argc > i)
-        mock_data = atoi(argv[i]);
-
-    i++;
-    int num_optimize = 0;
-    if (argc > i)
-        num_optimize = atoi(argv[i]);
-
-    i++;
-    scale_x = 1; //200/3;
-    if (argc > i)
-        scale_x = atof(argv[i]);
-
-    i++;
-    scale_y = 1; //1000/3;
-    if (argc > i)
-        scale_y = atof(argv[i]);
-
-    i++;
-    lp = 1;
-    lp = 3.9366402;
-    if (argc > i)
-        lp = atof(argv[i]);
-
-    i++;
-    l0 = 1;
-    l0 = 4.75065422;
-    if (argc > i)
-        l0 = atof(argv[i]);
-
-    i++;
-    lm = 1;
-    lm = 5.33050119;
-    if (argc > i)
-        lm = atof(argv[i]);
-
-    i++;
-    Jp = -1;
-    Jp = -4.82844051; 
-    if (argc > i)
-        Jp = atof(argv[i]);
-
-    i++;
-    Jm = -1;
-    Jm = 0.27035404;
-    if (argc > i)
-        Jm = atof(argv[i]);
-
-    i++;
-    Jpm = 3;
-    Jpm = 5.30866331;
-    if (argc > i)
-        Jpm = atof(argv[i]);
-        
-
-    i++;
-    J0 = 0.1;
-    J0 = -13.99622903;
-    if (argc > i)
-        J0 = atof(argv[i]);
-
-    i++;
-    J0p = 0.5;
-    J0p = -7.17055996;  
-    if (argc > i)
-        J0p = atof(argv[i]);
-
-    i++;
-    J0m = 0.2;
-    J0m = 5.06059504;
-    if (argc > i)
-        J0m = atof(argv[i]);
-
-    if (DEBUG)
-    {
-        cout << "input par test:"
-            << "scale_x " << scale_x << endl
-            << "scale_y " << scale_y << endl
-            << "lp " << lp << endl
-            << "lm " << lm << endl
-            << "l0 " << l0 << endl
-            << "Jp " << Jp << endl
-            << "Jm " << Jm << endl
-            << "Jpm " << Jpm << endl
-            << "J0 " << J0 << endl
-            << "J0p " << J0p << endl
-            << "J0m " << J0m << endl
-            << endl;
-    }
-
-    // return 0;
-
-    // --------------------------------------------------------------
-
-    bool do_optimize = false;
-    do_optimize = num_optimize > 0;
-
-    Data data;
-    Mem mem;
-
-    if (!do_optimize)
-    {
-        // mock_data = true;
-        // mock_data = false;
-        
-        gnuplot_out = true;
-        err_out = false;
-        
-        init_set(data, mem, mock_data);
-        core_set(data, mem);    
-
-        return 0;
-    }
-
-    mock_data = false;
     gnuplot_out = false;
     err_out = true;
 
-    init_set(data, mem, mock_data);
-    
+    init_set(data, mem, false);
+
     double min_err, err;
     min_err = 1e9;
 
-
-    double par_best[9+2];
+    double par_best[9 + 2];
 
     par_best[0] = lp;
     par_best[1] = lm;
@@ -687,19 +513,19 @@ int main(int argc, char **argv)
 
         if (i > 0)
         {
-            lp = par_best[0] + par_best[0]*s*uniform(-1, 1);
-            lm = par_best[1] + par_best[1]*s*uniform(-1, 1);
-            l0 = par_best[2] + par_best[2]*s*uniform(-1, 1);
+            lp = par_best[0] + par_best[0] * s * uniform(-1, 1);
+            lm = par_best[1] + par_best[1] * s * uniform(-1, 1);
+            l0 = par_best[2] + par_best[2] * s * uniform(-1, 1);
 
             // // parameters (polymer interactions)
-            Jp = par_best[3] + par_best[3]*s*uniform(-1, 1);
-            Jm = par_best[4] + par_best[4]*s*uniform(-1, 1);
-            Jpm = par_best[5] + par_best[5]*s*uniform(-1, 1);
+            Jp = par_best[3] + par_best[3] * s * uniform(-1, 1);
+            Jm = par_best[4] + par_best[4] * s * uniform(-1, 1);
+            Jpm = par_best[5] + par_best[5] * s * uniform(-1, 1);
 
             // // parameters (solvent interactions)
-            J0 = par_best[6] + par_best[6]*s*uniform(-1, 1);
-            J0p = par_best[7] + par_best[7]*s*uniform(-1, 1);
-            J0m = par_best[8] + par_best[8]*s*uniform(-1, 1);
+            J0 = par_best[6] + par_best[6] * s * uniform(-1, 1);
+            J0p = par_best[7] + par_best[7] * s * uniform(-1, 1);
+            J0m = par_best[8] + par_best[8] * s * uniform(-1, 1);
 
             // scale_x = par_best[9] + par_best[9]*s*uniform(-1, 1);
             // scale_y = par_best[10] + par_best[10]*s*uniform(-1, 1);
@@ -717,7 +543,7 @@ int main(int argc, char **argv)
                 cout << endl;
             }
             min_err = err;
-            
+
             par_best[0] = lp;
             par_best[1] = lm;
             par_best[2] = l0;
@@ -733,19 +559,19 @@ int main(int argc, char **argv)
             if (DEBUG)
             {
                 cout << min_err
-                    << " ::" 
-                    << " " << scale_x
-                    << " " << scale_y
-                    << " " << lp
-                    << " " << lm
-                    << " " << l0
-                    << " " << Jp
-                    << " " << Jm
-                    << " " << Jpm
-                    << " " << J0
-                    << " " << J0p
-                    << " " << J0m
-                    << endl;
+                     << " ::"
+                     << " " << scale_x
+                     << " " << scale_y
+                     << " " << lp
+                     << " " << lm
+                     << " " << l0
+                     << " " << Jp
+                     << " " << Jm
+                     << " " << Jpm
+                     << " " << J0
+                     << " " << J0p
+                     << " " << J0m
+                     << endl;
             }
         }
     }
@@ -767,20 +593,38 @@ int main(int argc, char **argv)
     if (DEBUG)
     {
         cout << "best par:"
-            << " " << scale_x
-            << " " << scale_y
-            << " " << lp
-            << " " << lm
-            << " " << l0
-            << " " << Jp
-            << " " << Jm
-            << " " << Jpm
-            << " " << J0
-            << " " << J0p
-            << " " << J0m
-            << endl;
+             << " " << scale_x
+             << " " << scale_y
+             << " " << lp
+             << " " << lm
+             << " " << l0
+             << " " << Jp
+             << " " << Jm
+             << " " << Jpm
+             << " " << J0
+             << " " << J0p
+             << " " << J0m
+             << endl;
 
         cout << "result:"
+             << "scale_x " << scale_x << endl
+             << "scale_y " << scale_y << endl
+             << "lp " << lp << endl
+             << "lm " << lm << endl
+             << "l0 " << l0 << endl
+             << "Jp " << Jp << endl
+             << "Jm " << Jm << endl
+             << "Jpm " << Jpm << endl
+             << "J0 " << J0 << endl
+             << "J0p " << J0p << endl
+             << "J0m " << J0m << endl
+             << endl;
+    }
+}
+
+void print_parameters()
+{
+    cout << "input par test:"
             << "scale_x " << scale_x << endl
             << "scale_y " << scale_y << endl
             << "lp " << lp << endl
@@ -793,13 +637,118 @@ int main(int argc, char **argv)
             << "J0p " << J0p << endl
             << "J0m " << J0m << endl
             << endl;
+}
+
+int main(int argc, char **argv)
+{
+    srand(time(0));
+
+    int i = 0;
+
+    i++;
+    f_exp_ph_sep = argv[i];
+
+    i++;
+    f_exp_mixed = argv[i];
+
+    i++;
+    bool use_grid_data = 0;
+    if (argc > i)
+        use_grid_data = atoi(argv[i]);
+
+    i++;
+    int num_optimize = 0;
+    if (argc > i)
+        num_optimize = atoi(argv[i]);
+
+    i++;
+    scale_x = 1;
+    if (argc > i)
+        scale_x = atof(argv[i]);
+
+    i++;
+    scale_y = 1;
+    if (argc > i)
+        scale_y = atof(argv[i]);
+
+    i++;
+    lp = 1;
+    if (argc > i)
+        lp = atof(argv[i]);
+
+    i++;
+    lm = 1;
+    if (argc > i)
+        lm = atof(argv[i]);
+
+    i++;
+    l0 = 1;
+    if (argc > i)
+        l0 = atof(argv[i]);
+
+    i++;
+    Jp = -1;
+    if (argc > i)
+        Jp = atof(argv[i]);
+
+    i++;
+    Jm = -1;
+    if (argc > i)
+        Jm = atof(argv[i]);
+
+    i++;
+    Jpm = 3;
+    if (argc > i)
+        Jpm = atof(argv[i]);
+
+    i++;
+    J0 = 0.1;
+    if (argc > i)
+        J0 = atof(argv[i]);
+
+    i++;
+    J0p = 0.5;
+    if (argc > i)
+        J0p = atof(argv[i]);
+
+    i++;
+    J0m = 0.2;
+    if (argc > i)
+        J0m = atof(argv[i]);
+
+    // --------------------------------------------------------------
+    if (DEBUG)
+        print_parameters();
+
+    // --------------------------------------------------------------
+
+    Data data;
+    Mem mem;
+
+    if (num_optimize == 1)
+    {
+        gnuplot_out = false;
+        err_out = true;
+
+        init_set(data, mem, use_grid_data);
+        double err = core_set(data, mem);
+
+        cout << err << endl;
+
+        return 0;
     }
+    else if (num_optimize > 1)
+    {
+        optimize(data, mem, num_optimize);
+    }
+    else
+    {
+        gnuplot_out = true;
+        err_out = false;
 
-    // gnuplot_out = true;
-    // err_out = false;
-    
-    // core_set(data, mem); 
+        init_set(data, mem, use_grid_data);
+        core_set(data, mem);
 
-    return 0;
-    
+        return 0;
+    }
 }
