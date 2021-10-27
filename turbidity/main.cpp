@@ -38,8 +38,8 @@ double J0;
 double J0p;
 double J0m;
 
-double scale_x;
-double scale_y;
+double limit_x;
+double limit_y;
 
 double z = 6; // lattice connectivity
 double dt = 0.1;
@@ -80,8 +80,8 @@ void bp_set(
 
     for (int i = 0; i < X.size(); i++)
     {
-        double cp = X[i] * scale_x + dx;
-        double cm = Y[i] * scale_y + dy;
+        double cp = X[i] + dx;
+        double cm = Y[i] + dy;
 
         if (cp + cm < 1)
         {
@@ -218,6 +218,7 @@ void load_exp_data(
 {
     double p, m;
 
+    // load phase separated
     ifstream f0(f_exp_ph_sep);
     if (f0.is_open())
     {
@@ -237,6 +238,7 @@ void load_exp_data(
         throw std::runtime_error("error loading exp_ph_sep file");
     }
 
+    // load phase separated
     ifstream f1(f_exp_mixed);
     if (f1.is_open())
     {
@@ -274,6 +276,10 @@ void load_use_grid_data(
         {
             double x = (i + 1.0) / n;
             double y = (j + 1.0) / n;
+
+            x *= limit_x;
+            y *= limit_y;
+
             if (x + y < 1)
             {
                 cp.push_back(x);
@@ -317,9 +323,9 @@ void init_set(Data &data, Mem &mem, const bool use_grid_data)
 
     for (int i = 0; i < n; i++)
     {
-        if (data.x[i] * scale_x  + data.y[i] * scale_y > 1)
+        if (data.x[i]  + data.y[i] > 1)
         {
-            cout << data.x[i] * scale_x << " + " << data.y[i] * scale_y << " > 1" << endl;
+            cout << data.x[i] << " + " << data.y[i] << " > 1" << endl;
             throw std::runtime_error("cp + cm > 1");
         }
     }
@@ -381,8 +387,8 @@ void init_set(Data &data, Mem &mem, const bool use_grid_data)
 }
 double core_set(Data &data, Mem &mem)
 {
-    double dx = 1e-6; // * scale_x;
-    double dy = 1e-6; // * scale_y;
+    double dx = 1e-6; // * limit_x;
+    double dy = 1e-6; // * limit_y;
 
     bp_set(0, 0, data.x, data.y, mem.hx_xy, mem.hy_xy);
     bp_set(0, dy, data.x, data.y, mem.hx_xyp, mem.hy_xyp);
@@ -498,8 +504,8 @@ void optimize(Data &data, Mem &mem, const int num_optimize)
     par_best[6] = J0;
     par_best[7] = J0p;
     par_best[8] = J0m;
-    par_best[9] = scale_x;
-    par_best[10] = scale_y;
+    par_best[9] = limit_x;
+    par_best[10] = limit_y;
 
     double s = 1.00;
 
@@ -527,10 +533,10 @@ void optimize(Data &data, Mem &mem, const int num_optimize)
             J0p = par_best[7] + par_best[7] * s * uniform(-1, 1);
             J0m = par_best[8] + par_best[8] * s * uniform(-1, 1);
 
-            // scale_x = par_best[9] + par_best[9]*s*uniform(-1, 1);
-            // scale_y = par_best[10] + par_best[10]*s*uniform(-1, 1);
-            // scale_x = uniform(1, 1);
-            // scale_y = uniform(1, 1);
+            // limit_x = par_best[9] + par_best[9]*s*uniform(-1, 1);
+            // limit_y = par_best[10] + par_best[10]*s*uniform(-1, 1);
+            // limit_x = uniform(1, 1);
+            // limit_y = uniform(1, 1);
         }
         // cout << J0m << " ";
 
@@ -553,15 +559,15 @@ void optimize(Data &data, Mem &mem, const int num_optimize)
             par_best[6] = J0;
             par_best[7] = J0p;
             par_best[8] = J0m;
-            par_best[9] = scale_x;
-            par_best[10] = scale_y;
+            par_best[9] = limit_x;
+            par_best[10] = limit_y;
 
             if (DEBUG)
             {
                 cout << min_err
                      << " ::"
-                     << " " << scale_x
-                     << " " << scale_y
+                     << " " << limit_x
+                     << " " << limit_y
                      << " " << lp
                      << " " << lm
                      << " " << l0
@@ -585,16 +591,16 @@ void optimize(Data &data, Mem &mem, const int num_optimize)
     J0 = par_best[6];
     J0p = par_best[7];
     J0m = par_best[8];
-    scale_x = par_best[9];
-    scale_y = par_best[10];
+    limit_x = par_best[9];
+    limit_y = par_best[10];
 
     cout << min_err << endl;
 
     if (DEBUG)
     {
         cout << "best par:"
-             << " " << scale_x
-             << " " << scale_y
+             << " " << limit_x
+             << " " << limit_y
              << " " << lp
              << " " << lm
              << " " << l0
@@ -607,8 +613,8 @@ void optimize(Data &data, Mem &mem, const int num_optimize)
              << endl;
 
         cout << "result:"
-             << "scale_x " << scale_x << endl
-             << "scale_y " << scale_y << endl
+             << "limit_x " << limit_x << endl
+             << "limit_y " << limit_y << endl
              << "lp " << lp << endl
              << "lm " << lm << endl
              << "l0 " << l0 << endl
@@ -625,8 +631,8 @@ void optimize(Data &data, Mem &mem, const int num_optimize)
 void print_parameters()
 {
     cout << "input par test:"
-            << "scale_x " << scale_x << endl
-            << "scale_y " << scale_y << endl
+            << "limit_x " << limit_x << endl
+            << "limit_y " << limit_y << endl
             << "lp " << lp << endl
             << "lm " << lm << endl
             << "l0 " << l0 << endl
@@ -662,14 +668,14 @@ int main(int argc, char **argv)
         num_optimize = atoi(argv[i]);
 
     i++;
-    scale_x = 1;
+    limit_x = 1;
     if (argc > i)
-        scale_x = atof(argv[i]);
+        limit_x = atof(argv[i]);
 
     i++;
-    scale_y = 1;
+    limit_y = 1;
     if (argc > i)
-        scale_y = atof(argv[i]);
+        limit_y = atof(argv[i]);
 
     i++;
     lp = 1;
