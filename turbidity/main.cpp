@@ -14,7 +14,7 @@
 
 // USAGE
 // make or g++ main.cpp -O3 -std=c++17 -o turb_fit
-// ./a.out path_to/ph_sep_atp.dat path_to/mixed_atp.dat grid_data optimize scale scale lp lm l0 Jp Jm Jpm J0 J0p J0m
+// ./a.out path_to/ph_sep_atp.dat path_to/mixed_atp.dat grid_data optimize lim_x lim_y scale_x scale_y lp lm l0 Jp Jm Jpm J0 J0p J0m
 
 using namespace std;
 
@@ -24,27 +24,24 @@ bool err_out = true;
 double Hess[2][2];
 
 // polymer length "degeneracies"
-double lp;
-double lm;
-double l0;
+double lp, lm, l0;
 
 // parameters (polymer interactions)
-double Jp;
-double Jm;
-double Jpm;
+double Jp, Jm, Jpm;
 
 // parameters (solvent interactions)
-double J0;
-double J0p;
-double J0m;
+double J0, J0p, J0m;
 
-double limit_x;
-double limit_y;
+double limit_x, limit_y;
+
+double vol_frac_scaling_x, vol_frac_scaling_y;
 
 double z = 6; // lattice connectivity
+
 double dt = 0.1;
 // double dt = 0.5;
 // double dt = 1.0;
+
 // double tol = 0.00000001;
 double tol = 1e-8;
 
@@ -64,6 +61,25 @@ vector<double> mm_;
 vector<double> xp_;
 vector<double> xm_;
 
+void print_parameters()
+{
+    cout << "# input par test:" << endl
+        << "# limit_x: " << limit_x << endl
+        << "# limit_y: " << limit_y << endl
+        << "# vol_frac_scaling_x: " << vol_frac_scaling_x << endl
+        << "# vol_frac_scaling_y: " << vol_frac_scaling_y << endl
+        << "# lp: " << lp << endl
+        << "# lm: " << lm << endl
+        << "# l0: " << l0 << endl
+        << "# Jp: " << Jp << endl
+        << "# Jm: " << Jm << endl
+        << "# Jpm: " << Jpm << endl
+        << "# J0: " << J0 << endl
+        << "# J0p: " << J0p << endl
+        << "# J0m: " << J0m << endl
+        << endl;
+}
+
 void bp_set(
     const double dx,
     const double dy,
@@ -74,6 +90,8 @@ void bp_set(
 {
     int it = 0;
     double l0expJ0 = l0 * exp(J0);
+    double l0expJ0p = l0 * exp(J0p);
+    double l0expJ0m = l0 * exp(J0m);
 
     double loglp = log(lp);
     double loglm = log(lm);
@@ -83,7 +101,7 @@ void bp_set(
         double cp = X[i] + dx;
         double cm = Y[i] + dy;
 
-        if (cp + cm < 1)
+        if (true) //(cp + cm < 1)
         {
             double fp, fm;
             double mp, mm;
@@ -152,8 +170,8 @@ void bp_set(
 
                 double d = (lp * exp(J0p_mp - xp) + lm * exp(J0m_mm - xm) + l0expJ0);
 
-                fp = xp - log(lp * (exp(Jp_mp - xp) + lm * exp(Jpm_mm - xm) + l0expJ0) / d);
-                fm = xm - log(lp * (exp(Jpm_mp - xp) + lm * exp(Jm_mm - xm) + l0expJ0) / d);
+                fp = xp - log(lp * (exp(Jp_mp - xp) + lm * exp(Jpm_mm - xm) + l0expJ0p) / d);
+                fm = xm - log(lp * (exp(Jpm_mp - xp) + lm * exp(Jm_mm - xm) + l0expJ0m) / d);
 
                 xp -= fp * dt;
                 xm -= fm * dt;
@@ -178,7 +196,7 @@ void bp_set(
     // cout << "#" << it << endl;
 }
 
-void hess_set(
+int hess_set(
     const double dx,
     const double dy,
     const vector<double> &hX_xy,
@@ -197,8 +215,28 @@ void hess_set(
         Hess[0][1] = (hX_xyp[i] - hX_xy[i]) / dy;
         Hess[1][0] = (hY_xpy[i] - hY_xy[i]) / dx;
 
+        // cout << Hess[0][1] << " " << Hess[1][0] << endl;
+
+        if (fabs(Hess[0][1] - Hess[1][0]) > 5e-2 * (fabs(Hess[0][1]) + fabs(Hess[1][0])))
+        {
+            if (DEBUG)
+            {
+                print_parameters();
+                cout << Hess[0][1] << " " << Hess[1][0] << endl;
+                throw std::runtime_error("Hessian must be symmetric");
+            }
+            else
+            {
+                return 1;
+            }
+        }
+
         double trace = Hess[0][0] + Hess[1][1];
-        double deter = Hess[0][0] * Hess[1][1] - pow(0.5 * Hess[0][1] + 0.5 * Hess[1][0], 2);
+        // double deter = Hess[0][0] * Hess[1][1] - pow(0.5 * Hess[0][1] + 0.5 * Hess[1][0], 2);
+        double deter = Hess[0][0] * Hess[1][1] - Hess[0][1] * Hess[1][0];
+
+        // cout << trace << endl;
+        // cout << deter << endl;
 
         if (trace > 0 && deter > 0) // if positive definite (stable)
         {
@@ -209,6 +247,7 @@ void hess_set(
             sep[i] = true;
         }
     }
+    return 0;
 }
 
 void load_exp_data(
@@ -220,47 +259,57 @@ void load_exp_data(
 
     // load phase separated
     ifstream f0(f_exp_ph_sep);
-    if (f0.is_open())
-    {
-        while (f0.good())
-        {
-            f0 >> p >> m;
-            if (p > 0 && m > 0)
-            {
-                cp.push_back(p);
-                cm.push_back(m);
-                sep.push_back(true);
-            }
-        }
-    }
-    else
+    
+    if (!f0)
     {
         throw std::runtime_error("error loading exp_ph_sep file");
     }
-
-    // load phase separated
-    ifstream f1(f_exp_mixed);
-    if (f1.is_open())
+    
+    while (f0 >> p >> m)
     {
-        while (f1.good())
+        if (p > 0 && m > 0)
         {
-            f1 >> p >> m;
-            if (p > 0 && m > 0)
-            {
-                cp.push_back(p);
-                cm.push_back(m);
-                sep.push_back(false);
-            }
+            // cout << ":: " << p << " " << m << endl;
+
+            p = p * vol_frac_scaling_x;
+            m = m * vol_frac_scaling_y;
+
+            // cout << "  " << p << " " << m << endl;
+
+            cp.push_back(p);
+            cm.push_back(m);
+            sep.push_back(true);
         }
     }
-    else
+
+    // load mixed
+    ifstream f1(f_exp_mixed);
+    
+    if (!f1)
     {
         throw std::runtime_error("error loading exp_mixed file");
     }
 
+    while (f1 >> p >> m)
+    {
+        if (p > 0 && m > 0)
+        {
+            // cout << ":: " << p << " " << m << endl;
+
+            p = p * vol_frac_scaling_x;
+            m = m * vol_frac_scaling_y;
+
+            // cout << "  " << p << " " << m << endl;
+
+            cp.push_back(p);
+            cm.push_back(m);
+            sep.push_back(false);
+        }
+    }
+
     if (DEBUG)
     {
-        cout << "# " << sep.size() << endl;
+        cout << "# Loaded " << sep.size()  << " data points." << endl;
     }
 }
 
@@ -315,7 +364,7 @@ struct Mem
 void init_set(Data &data, Mem &mem, const bool use_grid_data)
 {
     if (use_grid_data)
-        load_use_grid_data(data.x, data.y, data.sep_exp, 256);
+        load_use_grid_data(data.x, data.y, data.sep_exp, 128);
     else
         load_exp_data(data.x, data.y, data.sep_exp);
 
@@ -323,7 +372,7 @@ void init_set(Data &data, Mem &mem, const bool use_grid_data)
 
     for (int i = 0; i < n; i++)
     {
-        if (data.x[i]  + data.y[i] > 1)
+        if (data.x[i] + data.y[i] > 1)
         {
             cout << data.x[i] << " + " << data.y[i] << " > 1" << endl;
             throw std::runtime_error("cp + cm > 1");
@@ -331,14 +380,11 @@ void init_set(Data &data, Mem &mem, const bool use_grid_data)
     }
 
     auto [min_x, max_x] = std::minmax_element(begin(data.x), end(data.x));
+    auto [min_y, max_y] = std::minmax_element(begin(data.y), end(data.y));
+    
     if (DEBUG)
     {
         cout << "# x: [" << *min_x << "," << *max_x << "]" << endl;
-    }
-
-    auto [min_y, max_y] = std::minmax_element(begin(data.y), end(data.y));
-    if (DEBUG)
-    {
         cout << "# y: [" << *min_y << "," << *max_y << "]" << endl;
     }
 
@@ -385,99 +431,123 @@ void init_set(Data &data, Mem &mem, const bool use_grid_data)
         }
     }
 }
+void write_result_to_file(Data &data)
+{
+    ofstream fout_0;
+    ofstream fout_1;
+    ofstream fout_2;
+
+    fout_0.open("sep");
+    fout_1.open("mix");
+    fout_2.open("result.txt");
+
+    for (int i = 0; i < data.x.size(); i++)
+    {
+        if (data.sep[i] == true)
+            fout_0 << data.x[i] << " " << data.y[i] << endl;
+        else
+            fout_1 << data.x[i] << " " << data.y[i] << endl;
+
+        fout_2  << data.x[i] << " " << data.y[i]  << " " << int(data.sep[i]) << endl;
+    }
+    fout_0.close();
+    fout_1.close();
+    fout_2.close();
+}
+double calculate_err(Data &data, Mem &mem)
+{
+    // assert(data.sep.size() == data.sep_exp.size());
+
+    double err = 0;
+    bool all_sep = true;
+    bool all_mix = true;
+    bool all_sep_wrong = true;
+
+    int n = data.sep.size();
+
+    for (int i = 0; i < n; i++)
+    {
+        if (data.sep[i] == true)
+        {
+            if (data.sep[i] == data.sep_exp[i])
+            {
+                all_sep_wrong = false;
+                break;
+            }
+        }
+    }
+    for (int i = 0; i < n; i++)
+    {
+        if (data.sep[i] == true)
+        {
+            all_mix = false;
+            break;
+        }
+    }
+    for (int i = 0; i < n; i++)
+    {
+        if (data.sep[i] == false)
+        {
+            all_sep = false;
+            break;
+        }
+    }
+    if (all_sep || all_mix || all_sep_wrong)
+    {
+        err = 1.0;
+    }
+    else
+    {
+        for (int i = 0; i < n; i++)
+        {
+            if (data.sep[i] != data.sep_exp[i])
+            {
+                if (mem.boundary[i] == true)
+                {
+                    err += 10;
+                }
+                else
+                {
+                    err++;
+                }
+            }
+        }
+        err /= data.sep.size();
+    }
+    return err * 100;
+}
+
 double core_set(Data &data, Mem &mem)
 {
-    double dx = 1e-6; // * limit_x;
-    double dy = 1e-6; // * limit_y;
+    double dx = 1e-7; // * limit_x;
+    double dy = 1e-7; // * limit_y;
+
+    // dx = 1.0/300;
+    // dy = 1.0/300;
 
     bp_set(0, 0, data.x, data.y, mem.hx_xy, mem.hy_xy);
     bp_set(0, dy, data.x, data.y, mem.hx_xyp, mem.hy_xyp);
     bp_set(dx, 0, data.x, data.y, mem.hx_xpy, mem.hy_xpy);
 
-    hess_set(dx, dy,
+    int hess_out = hess_set(dx, dy,
              mem.hx_xy, mem.hy_xy,
              mem.hx_xyp, mem.hy_xyp,
              mem.hx_xpy, mem.hy_xpy,
              data.sep);
 
+    if (hess_out > 0)
+    {
+        return 1000;
+    }
+
     if (gnuplot_out)
     {
-        ofstream fout_0;
-        ofstream fout_1;
-        fout_0.open("sep");
-        fout_1.open("mix");
-
-        for (int i = 0; i < data.x.size(); i++)
-        {
-            if (data.sep[i] == true)
-                fout_0 << data.x[i] << " " << data.y[i] << endl;
-            else
-                fout_1 << data.x[i] << " " << data.y[i] << endl;
-        }
-        fout_0.close();
-        fout_1.close();
+        write_result_to_file(data);
     }
 
     if (err_out)
     {
-
-        // assert(data.sep.size() == data.sep_exp.size());
-
-        double err = 0;
-        bool all_sep = true;
-        bool all_mix = true;
-        bool all_sep_wrong = true;
-
-        for (int i = 0; i < data.sep.size(); i++)
-        {
-            if (data.sep[i] == true)
-            {
-                if (data.sep[i] == data.sep_exp[i])
-                {
-                    all_sep_wrong = false;
-                    break;
-                }
-            }
-        }
-        for (int i = 0; i < data.sep.size(); i++)
-        {
-            if (data.sep[i] == true)
-            {
-                all_mix = false;
-                break;
-            }
-        }
-        for (int i = 0; i < data.sep.size(); i++)
-        {
-            if (data.sep[i] == false)
-            {
-                all_sep = false;
-                break;
-            }
-        }
-        if (all_sep || all_mix || all_sep_wrong)
-        {
-            err = 1.0;
-        }
-        else
-        {
-            for (int i = 0; i < data.sep.size(); i++)
-            {
-                if (data.sep[i] != data.sep_exp[i])
-                {
-                    if (mem.boundary[i] == true)
-                    {
-                        err += 10;
-                    }
-                    else
-                    {
-                        err++;
-                    }
-                }
-            }
-            err /= data.sep.size();
-        }
-        return err * 100;
+        return calculate_err(data, mem);
     }
 
     return 0;
@@ -493,7 +563,7 @@ void optimize(Data &data, Mem &mem, const int num_optimize)
     double min_err, err;
     min_err = 1e9;
 
-    double par_best[9 + 2];
+    double par_best[9];
 
     par_best[0] = lp;
     par_best[1] = lm;
@@ -504,8 +574,6 @@ void optimize(Data &data, Mem &mem, const int num_optimize)
     par_best[6] = J0;
     par_best[7] = J0p;
     par_best[8] = J0m;
-    par_best[9] = limit_x;
-    par_best[10] = limit_y;
 
     double s = 1.00;
 
@@ -532,13 +600,7 @@ void optimize(Data &data, Mem &mem, const int num_optimize)
             J0 = par_best[6] + par_best[6] * s * uniform(-1, 1);
             J0p = par_best[7] + par_best[7] * s * uniform(-1, 1);
             J0m = par_best[8] + par_best[8] * s * uniform(-1, 1);
-
-            // limit_x = par_best[9] + par_best[9]*s*uniform(-1, 1);
-            // limit_y = par_best[10] + par_best[10]*s*uniform(-1, 1);
-            // limit_x = uniform(1, 1);
-            // limit_y = uniform(1, 1);
         }
-        // cout << J0m << " ";
 
         err = core_set(data, mem);
         // cout << err <<  endl;
@@ -559,15 +621,11 @@ void optimize(Data &data, Mem &mem, const int num_optimize)
             par_best[6] = J0;
             par_best[7] = J0p;
             par_best[8] = J0m;
-            par_best[9] = limit_x;
-            par_best[10] = limit_y;
 
             if (DEBUG)
             {
                 cout << min_err
                      << " ::"
-                     << " " << limit_x
-                     << " " << limit_y
                      << " " << lp
                      << " " << lm
                      << " " << l0
@@ -591,8 +649,6 @@ void optimize(Data &data, Mem &mem, const int num_optimize)
     J0 = par_best[6];
     J0p = par_best[7];
     J0m = par_best[8];
-    limit_x = par_best[9];
-    limit_y = par_best[10];
 
     cout << min_err << endl;
 
@@ -628,23 +684,6 @@ void optimize(Data &data, Mem &mem, const int num_optimize)
     }
 }
 
-void print_parameters()
-{
-    cout << "input par test:"
-            << "limit_x " << limit_x << endl
-            << "limit_y " << limit_y << endl
-            << "lp " << lp << endl
-            << "lm " << lm << endl
-            << "l0 " << l0 << endl
-            << "Jp " << Jp << endl
-            << "Jm " << Jm << endl
-            << "Jpm " << Jpm << endl
-            << "J0 " << J0 << endl
-            << "J0p " << J0p << endl
-            << "J0m " << J0m << endl
-            << endl;
-}
-
 int main(int argc, char **argv)
 {
     srand(time(0));
@@ -657,70 +696,51 @@ int main(int argc, char **argv)
     i++;
     f_exp_mixed = argv[i];
 
-    i++;
     bool use_grid_data = 0;
-    if (argc > i)
-        use_grid_data = atoi(argv[i]);
+    i++; if (argc > i) use_grid_data = atoi(argv[i]);
 
-    i++;
+    
     int num_optimize = 0;
-    if (argc > i)
-        num_optimize = atoi(argv[i]);
+    i++; if (argc > i) num_optimize = atoi(argv[i]);
 
-    i++;
     limit_x = 1;
-    if (argc > i)
-        limit_x = atof(argv[i]);
+    i++; if (argc > i) limit_x = atof(argv[i]);
 
-    i++;
     limit_y = 1;
-    if (argc > i)
-        limit_y = atof(argv[i]);
+    i++; if (argc > i) limit_y = atof(argv[i]);
 
-    i++;
+    vol_frac_scaling_x = 1;
+    i++; if (argc > i) vol_frac_scaling_x = atof(argv[i]);
+
+    vol_frac_scaling_y = 1;
+    i++; if (argc > i) vol_frac_scaling_y = atof(argv[i]);
+
     lp = 1;
-    if (argc > i)
-        lp = atof(argv[i]);
+    i++; if (argc > i) lp = atof(argv[i]);
 
-    i++;
     lm = 1;
-    if (argc > i)
-        lm = atof(argv[i]);
+    i++; if (argc > i) lm = atof(argv[i]);
 
-    i++;
     l0 = 1;
-    if (argc > i)
-        l0 = atof(argv[i]);
+    i++; if (argc > i) l0 = atof(argv[i]);
 
-    i++;
     Jp = -1;
-    if (argc > i)
-        Jp = atof(argv[i]);
+    i++; if (argc > i) Jp = atof(argv[i]);
 
-    i++;
     Jm = -1;
-    if (argc > i)
-        Jm = atof(argv[i]);
+    i++; if (argc > i) Jm = atof(argv[i]);
 
-    i++;
     Jpm = 3;
-    if (argc > i)
-        Jpm = atof(argv[i]);
+    i++; if (argc > i) Jpm = atof(argv[i]);
 
-    i++;
     J0 = 0.1;
-    if (argc > i)
-        J0 = atof(argv[i]);
+    i++; if (argc > i) J0 = atof(argv[i]);
 
-    i++;
     J0p = 0.5;
-    if (argc > i)
-        J0p = atof(argv[i]);
+    i++; if (argc > i) J0p = atof(argv[i]);
 
-    i++;
     J0m = 0.2;
-    if (argc > i)
-        J0m = atof(argv[i]);
+    i++; if (argc > i) J0m = atof(argv[i]);
 
     // --------------------------------------------------------------
     if (DEBUG)
