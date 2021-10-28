@@ -8,6 +8,8 @@ import numpy as np
 import subprocess
 from scipy.interpolate import NearestNDInterpolator
 
+from bp import bp_main
+
 mpl.rcParams['figure.figsize'] = (14,8)
 
 class Optimizer():
@@ -18,8 +20,13 @@ class Optimizer():
         vol_frac_scaling_y = 10,
         ):
 
+        self.sel = sel
+
         self.vol_frac_scaling_x = vol_frac_scaling_x
         self.vol_frac_scaling_y = vol_frac_scaling_y
+
+
+    def load_exp_data(self):
 
         f_sep = {}
         f_mix = {}
@@ -27,8 +34,60 @@ class Optimizer():
             f_sep[a] = f'exp/ph_sep_{a}.dat'
             f_mix[a] = f'exp/mixed_{a}.dat'
 
-        self.f_sep = f_sep[sel]
-        self.f_mix = f_mix[sel]
+        f_sep = f_sep[self.sel]
+        f_mix = f_mix[self.sel]
+
+        self.sep_exp = np.loadtxt(f_sep)
+        self.mix_exp = np.loadtxt(f_mix)
+
+        self.sep_exp[:,0] *= self.vol_frac_scaling_x
+        self.mix_exp[:,0] *= self.vol_frac_scaling_x
+
+        self.sep_exp[:,1] *= self.vol_frac_scaling_y
+        self.mix_exp[:,1] *= self.vol_frac_scaling_y
+
+        x = np.concatenate([self.sep_exp[:,0], self.mix_exp[:,0]])
+        y = np.concatenate([self.sep_exp[:,1], self.mix_exp[:,1]])
+        sep = np.concatenate([np.ones_like(self.sep_exp[:,0]), np.zeros_like(self.mix_exp[:,1])])
+
+        ind = ((x + y) < 1) & (x > 0)  & (y > 0)
+
+        x = x[ind]
+        y = y[ind]
+        sep = sep[ind]
+
+        self.x = np.ascontiguousarray(x, dtype=np.double)
+        self.y = np.ascontiguousarray(y, dtype=np.double)
+        self.sep = np.ascontiguousarray(sep, dtype=np.int32)
+
+        n = self.x.size
+
+        min_x = np.min(self.x)
+        min_y = np.min(self.y)
+        max_x = np.max(self.x)
+        max_y = np.max(self.y)
+
+        tolx = 1e-5 * self.vol_frac_scaling_x
+        toly = 1e-5 * self.vol_frac_scaling_y
+
+        is_on_boundary = np.zeros(n, dtype=np.int32)
+
+        for i in range(n):
+            if ((self.x[i] < min_x + tolx)
+                or (self.x[i] > max_x - tolx)
+                or (self.y[i] < min_y + toly)
+                or (self.y[i] > max_y - toly)):
+                is_on_boundary[i] = 1
+            else:
+                is_on_boundary[i] = 0
+
+        self.is_on_boundary = is_on_boundary
+
+        # plt.figure()
+        # plt.plot(self.x[self.is_on_boundary == 0], self.y[self.is_on_boundary == 0], 'x')
+        # plt.plot(self.x[self.is_on_boundary == 1], self.y[self.is_on_boundary == 1], 'x')
+        # plt.show()
+
 
     def compile(self):
         out = subprocess.run(
@@ -39,6 +98,97 @@ class Optimizer():
             print(out.stdout.decode("utf-8"))
             print(out.stderr.decode("utf-8"))
             raise(ValueError("Something went wrong"))
+
+    def optimize_cy(self, params, maxiter=1):
+
+        x = self.x
+        y = self.y
+        sep_exp = self.sep
+
+        n = x.size
+
+        hx_xy = np.zeros(n)
+        hy_xy = np.zeros(n)
+        hx_xpy = np.zeros(n)
+        hy_xpy = np.zeros(n)
+        hx_xyp = np.zeros(n)
+        hy_xyp = np.zeros(n)
+        mp_ = np.zeros(n)
+        mm_ = np.zeros(n)
+        xp_ = np.zeros(n)
+        xm_ = np.zeros(n)
+        sep = np.ones(n, dtype=np.int32)
+        is_on_boundary = np.ascontiguousarray(self.is_on_boundary)
+
+        args = [
+            x, y,
+            hx_xy,
+            hy_xy,
+            hx_xpy,
+            hy_xpy,
+            hx_xyp,
+            hy_xyp,
+            mp_, mm_, xp_, xm_,
+            sep,
+            sep_exp,
+            is_on_boundary,
+            n
+        ]
+
+        bounds = [params[key] for key in params]
+
+        nc = os.cpu_count() / 2
+
+        result = differential_evolution(self.fun_cy, bounds, args,
+            popsize=12,
+            polish=False,
+            maxiter=maxiter,
+            workers=1,
+            updating='deferred')
+
+        # print("best_x: " + " ".join([f"{x}" for x in result.x]))
+        print("best_x: " + ", ".join([f"{x}" for x in result.x]))
+        print(result.fun)
+
+        self.result = result
+
+    def fun_cy(self, P,
+            x, y,
+            hx_xy,
+            hy_xy,
+            hx_xpy,
+            hy_xpy,
+            hx_xyp,
+            hy_xyp,
+            mp_, mm_, xp_, xm_,
+            sep,
+            sep_exp,
+            is_on_boundary,
+            n):
+        
+        lp = P[0]
+        lm = P[1]
+        l0 = P[2]
+        Jp = P[3]
+        Jm = P[4]
+        Jpm = P[5]
+        J0 = P[6]
+        J0p = P[7]
+        J0m = P[8]
+
+        cost = bp_main(
+            lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, 
+            x, y,
+            hx_xy, hy_xy,
+            hx_xpy, hy_xpy,
+            hx_xyp, hy_xyp,
+            mp_, mm_, xp_, xm_,
+            sep, sep_exp,
+            is_on_boundary,
+            n,
+            )
+
+        return cost
 
     def fun(self, x, optimize, grid=False):
         

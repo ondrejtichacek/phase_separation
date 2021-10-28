@@ -225,10 +225,10 @@ int hess_set(
                 cout << Hess[0][1] << " " << Hess[1][0] << endl;
                 throw std::runtime_error("Hessian must be symmetric");
             }
-            else
-            {
-                return 1;
-            }
+            // else
+            // {
+            //     return 1;
+            // }
         }
 
         double trace = Hess[0][0] + Hess[1][1];
