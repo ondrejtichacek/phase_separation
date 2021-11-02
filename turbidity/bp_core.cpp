@@ -277,7 +277,7 @@ double calculate_err(
             {
                 if (is_on_boundary[i] == 1)
                 {
-                    err += 10;
+                    err += 2;
                 }
                 else
                 {

@@ -22,6 +22,9 @@ class Optimizer():
 
         self.sel = sel
 
+
+        print(self.sel)
+
         self.vol_frac_scaling_x = vol_frac_scaling_x
         self.vol_frac_scaling_y = vol_frac_scaling_y
 
@@ -140,14 +143,15 @@ class Optimizer():
         nc = os.cpu_count() / 2
 
         result = differential_evolution(self.fun_cy, bounds, args,
-            popsize=12,
+            popsize=2*64,
             polish=False,
             maxiter=maxiter,
             workers=1,
             updating='deferred')
 
-        # print("best_x: " + " ".join([f"{x}" for x in result.x]))
-        print("best_x: " + ", ".join([f"{x}" for x in result.x]))
+        print("best_x: " + " ".join([f"{x}" for x in result.x]))
+        # print("best_x: " + ", ".join([f"{x}" for x in result.x]))
+        print(result)
         print(result.fun)
 
         self.result = result
@@ -185,8 +189,7 @@ class Optimizer():
             mp_, mm_, xp_, xm_,
             sep, sep_exp,
             is_on_boundary,
-            n,
-            )
+            n)
 
         return cost
 
@@ -206,7 +209,7 @@ class Optimizer():
         lim_y = 1
 
         cmd = ["./turb_fit",
-            self.f_sep, 
+            self.f_sep,
             self.f_mix,
             f"{int(grid)}", f"{int(optimize)}",
             f"{lim_x}", f"{lim_y}",
