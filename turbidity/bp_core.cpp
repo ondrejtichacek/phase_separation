@@ -68,8 +68,11 @@ void bp_set(
 
     for (int i = 0; i < N; i++)
     {
-        double cp = X[i] + dx;
-        double cm = Y[i] + dy;
+        // double cp = X[i] + dx;
+        // double cm = Y[i] + dy;
+
+        double cm = X[i] + dx;
+        double cp = Y[i] + dy;
 
         if (true) //(cp + cm < 1)
         {
@@ -136,13 +139,13 @@ void bp_set(
                 // fp = xp - log(lp * (exp(Jp + mp - xp) + lm * exp(Jpm + mm - xm) + l0) / (lp * exp(mp - xp) + lm * exp(mm - xm) + l0));
                 // fm = xm - log(lp * (exp(Jpm + mp - xp) + lm * exp(Jm + mm - xm) + l0) / (lp * exp(mp - xp) + lm * exp(mm - xm) + l0));
 
-                // fp = xp - log(lp * (exp(Jp + mp - xp) + lm * exp(Jpm + mm - xm) + l0 * exp(J0p)) / (lp * exp(J0p + mp - xp) + lm * exp(J0m + mm - xm) + l0 * exp(J0)));
-                // fm = xm - log(lp * (exp(Jpm + mp - xp) + lm * exp(Jm + mm - xm) + l0 * exp(J0m)) / (lp * exp(J0p + mp - xp) + lm * exp(J0m + mm - xm) + l0 * exp(J0)));
+                // fp = xp - log((lp * exp(Jp + mp - xp) + lm * exp(Jpm + mm - xm) + l0 * exp(J0p)) / (lp * exp(J0p + mp - xp) + lm * exp(J0m + mm - xm) + l0 * exp(J0)));
+                // fm = xm - log((lp * exp(Jpm + mp - xp) + lm * exp(Jm + mm - xm) + l0 * exp(J0m)) / (lp * exp(J0p + mp - xp) + lm * exp(J0m + mm - xm) + l0 * exp(J0)));
 
                 double d = (lp * exp(J0p_mp - xp) + lm * exp(J0m_mm - xm) + l0expJ0);
 
-                fp = xp - log(lp * (exp(Jp_mp - xp) + lm * exp(Jpm_mm - xm) + l0expJ0p) / d);
-                fm = xm - log(lp * (exp(Jpm_mp - xp) + lm * exp(Jm_mm - xm) + l0expJ0m) / d);
+                fp = xp - log( (lp * exp(Jp_mp - xp) + lm * exp(Jpm_mm - xm) + l0expJ0p) / d);
+                fm = xm - log( (lp * exp(Jpm_mp - xp) + lm * exp(Jm_mm - xm) + l0expJ0m) / d);
 
                 xp -= fp * dt;
                 xm -= fm * dt;
@@ -159,8 +162,10 @@ void bp_set(
             hp = mp - z * xp;
             hm = mm - z * xm;
 
-            hX[i] = hp;
-            hY[i] = hm;
+            // hX[i] = hp;
+            // hY[i] = hm;
+            hX[i] = hm;
+            hY[i] = hp;
         }
     }
 
