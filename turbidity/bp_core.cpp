@@ -14,7 +14,7 @@
 
 using namespace std;
 
-void bp_set(
+int bp_set(
     // polymer length "degeneracies"
     const double lp,
     const double lm,
@@ -48,16 +48,17 @@ void bp_set(
 
     const double z = 6; // lattice connectivity
 
-    // const double dt = 0.1;
-    const double dt = 0.5;
+    const double dt = 0.1;
+    // const double dt = 0.5;
     // const double dt = 1.0;
 
     const double tol = 1e-8;
 
-    const bool warm_start = true;
-    // const bool warm_start = false;
+    // const bool warm_start = true;
+    const bool warm_start = false;
 
     // int it = 0;
+    int k = 0;
 
     double l0expJ0 = l0 * exp(J0);
     double l0expJ0p = l0 * exp(J0p);
@@ -90,6 +91,8 @@ void bp_set(
                 mm = cm;
             }
 
+            k = 0;
+
             do
             {
                 //double Z = 1.+exp(mp) + exp(mm);
@@ -100,6 +103,11 @@ void bp_set(
 
                 mp -= fp * dt;
                 mm -= fm * dt;
+
+                k++;
+
+                if (k > 100000)
+                    return 1;
 
             } while (fabs(fp) + fabs(fm) > tol);
 
@@ -129,6 +137,8 @@ void bp_set(
             double Jpm_mm = Jpm + mm;
             double Jm_mm = Jm + mm;
 
+            k = 0;
+
             do
             {
                 // it++;
@@ -150,6 +160,11 @@ void bp_set(
                 xp -= fp * dt;
                 xm -= fm * dt;
 
+                k++;
+
+                if (k > 100000)
+                    return 1;
+
             } while (fabs(fp) + fabs(fm) > tol);
 
             if (warm_start)
@@ -168,7 +183,7 @@ void bp_set(
             hY[i] = hp;
         }
     }
-
+    return 0;
     // cout << "#" << it << endl;
 }
 

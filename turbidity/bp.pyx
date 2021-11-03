@@ -25,7 +25,7 @@ from libcpp cimport bool
 from common import timer
 
 cdef extern from "bp_core.cpp":
-    void bp_set(
+    int bp_set(
         double lp,
         double lm,
         double l0,
@@ -102,9 +102,17 @@ cdef double core_set(
     cdef double dx = 1e-7
     cdef double dy = 1e-7
 
-    bp_set(lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, 0, 0, &x[0], &y[0], &hx_xy[0], &hy_xy[0], &mp_[0], &mm_[0], &xp_[0], &xm_[0], N)
-    bp_set(lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, 0, dy, &x[0], &y[0], &hx_xyp[0], &hy_xyp[0], &mp_[0], &mm_[0], &xp_[0], &xm_[0], N)
-    bp_set(lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, dx, 0, &x[0], &y[0], &hx_xpy[0], &hy_xpy[0], &mp_[0], &mm_[0], &xp_[0], &xm_[0], N)
+    cdef int s = 0
+
+    s = bp_set(lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, 0, 0, &x[0], &y[0], &hx_xy[0], &hy_xy[0], &mp_[0], &mm_[0], &xp_[0], &xm_[0], N)
+    if s > 0:
+        return -1
+    s = bp_set(lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, 0, dy, &x[0], &y[0], &hx_xyp[0], &hy_xyp[0], &mp_[0], &mm_[0], &xp_[0], &xm_[0], N)
+    if s > 0:
+        return -1
+    s = bp_set(lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, dx, 0, &x[0], &y[0], &hx_xpy[0], &hy_xpy[0], &mp_[0], &mm_[0], &xp_[0], &xm_[0], N)
+    if s > 0:
+        return -1
 
     hess_set(dx, dy,
              &hx_xy[0], &hy_xy[0],

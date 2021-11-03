@@ -10,8 +10,6 @@ from scipy.interpolate import NearestNDInterpolator
 
 from bp import bp_main
 
-mpl.rcParams['figure.figsize'] = (14,8)
-
 class Optimizer():
 
     def __init__(self,
@@ -21,8 +19,7 @@ class Optimizer():
         ):
 
         self.sel = sel
-
-
+        
         print(self.sel)
 
         self.vol_frac_scaling_x = vol_frac_scaling_x
@@ -40,18 +37,18 @@ class Optimizer():
         f_sep = f_sep[self.sel]
         f_mix = f_mix[self.sel]
 
-        self.sep_exp = np.loadtxt(f_sep)
-        self.mix_exp = np.loadtxt(f_mix)
+        sep_exp = np.loadtxt(f_sep)
+        mix_exp = np.loadtxt(f_mix)
 
-        self.sep_exp[:,0] *= self.vol_frac_scaling_x
-        self.mix_exp[:,0] *= self.vol_frac_scaling_x
+        sep_exp[:,0] *= self.vol_frac_scaling_x
+        mix_exp[:,0] *= self.vol_frac_scaling_x
 
-        self.sep_exp[:,1] *= self.vol_frac_scaling_y
-        self.mix_exp[:,1] *= self.vol_frac_scaling_y
+        sep_exp[:,1] *= self.vol_frac_scaling_y
+        mix_exp[:,1] *= self.vol_frac_scaling_y
 
-        x = np.concatenate([self.sep_exp[:,0], self.mix_exp[:,0]])
-        y = np.concatenate([self.sep_exp[:,1], self.mix_exp[:,1]])
-        sep = np.concatenate([np.ones_like(self.sep_exp[:,0]), np.zeros_like(self.mix_exp[:,1])])
+        x = np.concatenate([sep_exp[:,0], mix_exp[:,0]])
+        y = np.concatenate([sep_exp[:,1], mix_exp[:,1]])
+        sep = np.concatenate([np.ones_like(sep_exp[:,0]), np.zeros_like(mix_exp[:,0])])
 
         ind = ((x + y) < 1) & (x > 0)  & (y > 0)
 
@@ -110,18 +107,25 @@ class Optimizer():
 
         n = x.size
 
-        hx_xy = np.zeros(n)
-        hy_xy = np.zeros(n)
-        hx_xpy = np.zeros(n)
-        hy_xpy = np.zeros(n)
-        hx_xyp = np.zeros(n)
-        hy_xyp = np.zeros(n)
-        mp_ = np.zeros(n)
-        mm_ = np.zeros(n)
-        xp_ = np.zeros(n)
-        xm_ = np.zeros(n)
-        sep = np.ones(n, dtype=np.int32)
-        is_on_boundary = np.ascontiguousarray(self.is_on_boundary)
+        t_double = np.float64
+        t_bool = np.int32
+
+        hx_xy = np.zeros(n, dtype=t_double)
+        hy_xy = np.zeros(n, dtype=t_double)
+        
+        hx_xpy = np.zeros(n, dtype=t_double)
+        hy_xpy = np.zeros(n, dtype=t_double)
+        hx_xyp = np.zeros(n, dtype=t_double)
+        hy_xyp = np.zeros(n, dtype=t_double)
+        
+        mp_ = np.zeros(n, dtype=t_double)
+        mm_ = np.zeros(n, dtype=t_double)
+        xp_ = np.zeros(n, dtype=t_double)
+        xm_ = np.zeros(n, dtype=t_double)
+        
+        sep_model = np.ones(n, dtype=t_bool)
+
+        is_on_boundary = np.ascontiguousarray(self.is_on_boundary, dtype=t_bool)
 
         args = [
             x, y,
@@ -132,7 +136,7 @@ class Optimizer():
             hx_xyp,
             hy_xyp,
             mp_, mm_, xp_, xm_,
-            sep,
+            sep_model,
             sep_exp,
             is_on_boundary,
             n
@@ -140,17 +144,24 @@ class Optimizer():
 
         bounds = [params[key] for key in params]
 
-        nc = os.cpu_count() / 2
+        # nc = os.cpu_count() / 2
+
+        popsize = 2*64
+
+        maxeval = (maxiter + 1) * popsize * len(bounds)
+
+        print(f"Maximum fun evals: (maxiter + 1) * popsize * len(x) = {maxeval}")
+        print(f"  = {maxeval * 0.064 / 60} min")
 
         result = differential_evolution(self.fun_cy, bounds, args,
-            popsize=2*64,
+            popsize=popsize,
             polish=False,
-            maxiter=maxiter,
             workers=1,
-            updating='deferred')
+            # updating='deferred',
+            maxiter=maxiter)
 
         print("best_x: " + " ".join([f"{x}" for x in result.x]))
-        # print("best_x: " + ", ".join([f"{x}" for x in result.x]))
+        print("best_x: " + ", ".join([f"{x}" for x in result.x]))
         print(result)
         print(result.fun)
 
@@ -158,30 +169,26 @@ class Optimizer():
 
     def fun_cy(self, P,
             x, y,
-            hx_xy,
-            hy_xy,
-            hx_xpy,
-            hy_xpy,
-            hx_xyp,
-            hy_xyp,
+            hx_xy, hy_xy,
+            hx_xpy, hy_xpy,
+            hx_xyp, hy_xyp,
             mp_, mm_, xp_, xm_,
-            sep,
-            sep_exp,
-            is_on_boundary,
-            n):
+            sep, sep_exp,
+            is_on_boundary, n):
         
-        lp = P[0]
-        lm = P[1]
-        l0 = P[2]
-        Jp = P[3]
-        Jm = P[4]
-        Jpm = P[5]
-        J0 = P[6]
-        J0p = P[7]
-        J0m = P[8]
+        # lp = P[0]
+        # lm = P[1]
+        # l0 = P[2]
+        # Jp = P[3]
+        # Jm = P[4]
+        # Jpm = P[5]
+        # J0 = P[6]
+        # J0p = P[7]
+        # J0m = P[8]
 
         cost = bp_main(
-            lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, 
+            # lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, 
+            *P,
             x, y,
             hx_xy, hy_xy,
             hx_xpy, hy_xpy,

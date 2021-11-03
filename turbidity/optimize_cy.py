@@ -1,21 +1,26 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib as mpl
 from bp import bp_main
-
+from common import timer
 from optim import Optimizer
 
 import argparse
 parser = argparse.ArgumentParser()
 
 parser.add_argument("molecule", help="")
+parser.add_argument("--maxiter", type=int, default=100, help="")
+parser.add_argument("--plot", action="store_true", default=False, help="")
 
 args = parser.parse_args()
+
+mpl.rcParams['figure.figsize'] = (7,6)
 
 scale = {
     'amp': 232,
     'adp': 50,
     'atp': 20,
-    'poly_arg': 20,
+    # 'poly_arg': 20,
 }
 
 def main():    
@@ -35,19 +40,21 @@ def main():
     # m ... negative ... ATP/ADP/AMP
     # 0 ... solvent ... water
 
+    J = 20
+
     bounds = {
-        'lp': (0, 10),
-        'lm': (0, 10),
-        'l0': (1, 1),
-        'Jp': (-30, 0),
-        'Jm': (-30, 0),
-        'Jpm': (0, 30),
-        'J0': (0, 30),
-        'J0p': (0, 30),
-        'J0m': (0, 30),
+        'lp': (0, 10), # rel. to l0
+        'lm': (0, 10), # rel. to l0
+        'l0': (1, 1),  # reference
+        'Jp': (-J, 0),
+        'Jm': (-J, 0),
+        'Jpm': (0, J),
+        'J0': (0, J),
+        'J0p': (0, J),
+        'J0m': (0, J),
     }
 
-    opt.optimize_cy(bounds, maxiter=100)
+    opt.optimize_cy(bounds, maxiter=args.maxiter)
 
 
 def test(
@@ -63,14 +70,11 @@ def test(
     J0m = 0.2,
 ):
 
-    # sel = 'amp'
-    # sel = 'adp'
-    # sel = 'atp'
-
     opt = Optimizer(
         sel=sel,
         vol_frac_scaling_x=scale[sel],
-        vol_frac_scaling_y=scale['poly_arg'],
+        # vol_frac_scaling_y=scale['poly_arg'],
+        vol_frac_scaling_y=scale[sel],
     )
 
     opt.load_exp_data()
@@ -98,114 +102,203 @@ def test(
     sep = np.ones(n, dtype=np.int32)
     is_on_boundary = np.ascontiguousarray(opt.is_on_boundary)
 
-    # for i in range(n):
-    #     x[i] = xx[i]
-    #     y[i] = yy[i]
+    @timer
+    def bp_wrapper(*args):
+        return bp_main(*args)
 
-    err = bp_main(
+    err = bp_wrapper(
         lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, 
         x, y,
-        hx_xy,
-        hy_xy,
-        hx_xpy,
-        hy_xpy,
-        hx_xyp,
-        hy_xyp,
+        hx_xy, hy_xy,
+        hx_xpy, hy_xpy,
+        hx_xyp, hy_xyp,
         mp_, mm_, xp_, xm_,
-        sep,
-        sep_exp,
-        is_on_boundary,
-        n,
-        )
+        sep, sep_exp,
+        is_on_boundary, n
+    )
 
     print(err)
+
+    # i1 = sep != 0
+    # i2 = sep == 0
+
+    # plt.figure()
+    # plt.plot(x[i1], y[i1], 's', color='r', alpha=0.3)
+    # plt.plot(x[i2], y[i2], 's', color='#999', alpha=0.3)
+    # plt.xlabel(sel)
+    # plt.ylabel('polyARG')
+    # #plt.show()
+
+    # i1 = sep_exp != 0
+    # i2 = sep_exp == 0
+
+    # #plt.figure()
+    # plt.plot(x[i1], y[i1], 's', color='b', alpha=0.3)
+    # plt.plot(x[i2], y[i2], 's', color='#999', alpha=0.3)
+    # plt.xlabel(sel)
+    # plt.ylabel('polyARG')
+    # plt.show()
 
     i1 = sep != 0
     i2 = sep == 0
 
-    plt.figure()
-    plt.plot(x[i1], y[i1], 's')
-    plt.plot(x[i2], y[i2], 's')
-    plt.show()
-
-    i1 = sep_exp != 0
-    i2 = sep_exp == 0
+    i3 = sep_exp != 0
+    i4 = sep_exp == 0
 
     plt.figure()
-    plt.plot(x[i1], y[i1], 's')
-    plt.plot(x[i2], y[i2], 's')
+    plt.plot(x[i1 & i3], y[i1 & i3], 's', color='b', alpha=0.3)
+    plt.plot(x[i2 & i4], y[i2 & i4], 's', color='#999', alpha=0.3)
+    plt.plot(x[i1 & i4], y[i1 & i4], 's', color='r', alpha=0.3)
+    plt.plot(x[i2 & i3], y[i2 & i3], 's', color='#222', alpha=0.3)
+    plt.xlabel(sel)
+    plt.ylabel('polyARG')
     plt.show()
+
+    xp = np.linspace(0.001, 1, 200)
+    yp = np.linspace(0.001, 1, 200)
+    X, Y = np.meshgrid(xp, yp)
+    X = X.flatten()
+    Y = Y.flatten()
+    ind = ((X + Y) < 1) & ((X + Y) > 0)
+    print(ind.shape)
+    x = np.ascontiguousarray(X[ind])
+    y = np.ascontiguousarray(Y[ind])
+
+    n = x.size
+
+    print(n)
+
+    # x = np.random.rand(n) / 2
+    # y = np.random.rand(n) / 2
+    hx_xy = np.zeros(n)
+    hy_xy = np.zeros(n)
+    hx_xpy = np.zeros(n)
+    hy_xpy = np.zeros(n)
+    hx_xyp = np.zeros(n)
+    hy_xyp = np.zeros(n)
+    mp_ = np.zeros(n)
+    mm_ = np.zeros(n)
+    xp_ = np.zeros(n)
+    xm_ = np.zeros(n)
+    sep_exp = np.ones(n, dtype=np.int32)
+    sep = np.ones(n, dtype=np.int32)
+    is_on_boundary = np.zeros(n, dtype=np.int32)
+
+    @timer
+    def bp_wrapper(*args):
+        err = bp_main(*args)
+        if err < 0:
+            raise(ValueError("Not converged"))
+        return err
+
+    err = bp_wrapper(
+        lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, 
+        x, y,
+        hx_xy, hy_xy,
+        hx_xpy, hy_xpy,
+        hx_xyp, hy_xyp,
+        mp_, mm_, xp_, xm_,
+        sep, sep_exp,
+        is_on_boundary, n
+    )
+
+    print(err)
+
+    print(min(sep), max(sep))
+
+    Z = -np.ones_like(X)
+    Z[ind] = sep
+    X, Y = np.meshgrid(xp, yp)
+    Z = Z.reshape(X.shape)
+
+    print(X.shape)
+
+    plt.figure()
+    plt.pcolormesh(X, Y, Z, shading='auto', cmap='gray_r', vmax=3)
+    plt.show()
+    
 
 if __name__ == '__main__':
-    # main()
-    # test(1.3427142999104076, 4.834397995071055, 7.165882609064637, -13.8879476026868, -3.397763543728307, 8.613696431835756, 0.0, 3.8578599929869073, 1.2160291425758762)
-    # test(0.03534053655146341, 4.12870963025583, 7.772578929162346, -8.109507006971366, -0.8462496690912147, 6.601439856942313, 0.0, 12.913832887901071, -1.1870391753824072)
-    # test(0.6669275956773593, 9.028830574843594, 2.156316388827224, 1.834085729075321, -18.293449887182717, 3.573709802196281, 0.0, 8.83485531599549, -9.66742726423524)
-    # test(0.617672762653565, 2.0839170707637726, 9.102981023364176, -5.259882943309946, 3.8552178387696845, 17.391008497954488, 0.0, 10.055549226223555, 4.600405623487971)
-    # test(
-    #     0.0943951 ,  2.36255804,  4.72634985, -4.38707623,  3.29483375,
-    #    -2.16434615,  0.        , 10.95057411,  6.50080107
-    # )
-    # test(
-    #     0.10814398,   3.43883932,   7.10541945,  17.40753283,
-    #    -10.34348843,   1.95482393,   0.        ,  19.77449184,
-    #      1.61894913
-    # )
-    # test(
-    #     0.09327044,  7.44731216,  5.52221438, -5.41972529, 12.42907554,
-    #     1.87661773,  0.        , 20.73854286, 13.49874229
-    # )
-    # test(
-    #     0.43111956,   5.71757559,   4.78446164,  13.60170526,
-    #    -13.60371612,  28.95391746,   0.        ,  19.09137199,
-    #      7.86666062
-    # )
-    # test(
-    #     0.07014874,   1.81376872,   4.63802223,  -7.87018426,
-    #    -10.3582634 ,   3.4735479 ,   0.        ,  15.05304947,
-    #     -5.56339495
-    # )
-    # # ATP 27.131782945736433
-    # test(
-    #     'atp',
-    #     0.07015072,   7.07489837,   5.43583425,
-    #     -23.9875863 , -10.2214982 ,   4.20174434,
-    #     17.49648035,  24.45509315, 3.25529366
-    # )
-    # test(
-    #     'atp',
-    #     0.07147059,  7.41206443,  2.70655304,  3.12824289, 24.2155885 ,
-    #    13.6975276 , 20.87782068, 18.41593364, 22.08146782
-    # )
-    # # ADP 3.962101636520241
-    # test(
-    #     'adp',
-    #     0.43109974,   9.95798374,   7.82765335,  -9.79366477,
-    #    -28.40124494,   0.95289702, -27.14318311,  -5.85067836,
-    #    -22.33546241
-    # )
-    # test(
-    #     'adp',
-    #      0.40539653,   7.62329079,   4.84749126, -11.94038417,
-    #      3.97931193,  25.22924649, -12.91147737,   6.30994274,
-    #      3.97394686
-    # )
-    # # AMP 22.22222222222222
-    # test(
-    #     'amp',
-    #     2.38773025,  7.72065442,  3.88500279, -0.4264304 , -2.95089022,
-    #    26.74393907, 10.57298631, 26.6045048 ,  7.28890944
-    # )
-    # test(
-    #     'amp',
-    #     0.06431438,   2.00148103,   0.26630715,  -1.43729572,
-    #     21.76586637,   8.25110032, -13.96775667,  29.25753533,
-    #     26.92769403
-    # )
-    # ---------------------------------
-    test(
-        'atp',
-        0.60644092,   2.02152218,   1.        , -28.04578561,
-       -25.45601227,  20.81318829,   0.5831698 ,   8.37261113,
-         9.36110971
-    )
+    if not args.plot:
+        main()
+    else:
+
+        if args.molecule == "atp":
+            pass
+            par = []
+            # test(
+            #     'atp',
+            #     0.60644092,   2.02152218,   1.        , -28.04578561,
+            #    -25.45601227,  20.81318829,   0.5831698 ,   8.37261113,
+            #      9.36110971
+            # )
+            # test(
+            #     'atp',
+            #     7.59660748e-02,  8.68736963e+00,  1.00000000e+00, -1.06064513e+01,
+            #    -1.74019484e+01,  4.30497865e+00,  1.94293835e+01,  2.75468133e+01,
+            #     9.11843816e-03
+            # )
+            # test(
+            #     'atp',
+            #     4.29133622,   4.13506414,   1.        ,
+            #     -2.75974958, -27.76296863,  10.00089607, 
+            #     8.41102626,   9.59353239, 4.92079208)
+            # par = [
+            #        0.89242431,   6.17641545, 1.        ,                   
+            #     -9.34106654,  -25.135654  , 6.85812174, 
+            #      29.20649741,   22.89043865, 9.27507924,
+            # ]
+                        # 4.13506414, 4.29133622,    1.        ,
+            # -27.76296863, -2.75974958, 10.00089607, 
+            # 8.41102626,   4.92079208, 9.59353239,
+            # par = [5.967268501277159, 5.482414091116128, 1.0, 
+            # -9.239379014100262, -27.496862291205026, 23.84342682257863, 
+            # 28.662645932889866, 24.98230512512459, 23.631349971142807]
+            par.append([
+                3.2216783435433016, 8.532383036376764, 1.0,
+                -30.80075498859751, -39.65689126829896, 70.06872770454012,
+                36.35896896592931, 52.35004431313808, 50.18379684282572
+            ])
+            par.append([
+                5.0872767041095965, 4.534972342088027, 1.0,
+                -58.14889504948612, -62.13270322269149, 44.494819747364566, 
+                94.60512249360126, 67.22348587054094, 67.98335677618871
+            ])
+
+        elif args.molecule == "adp":
+            pass
+            par = []
+            # par.append([
+            #     8.3215676 , 2.2923081,    1.        ,
+            #     -1.2394423 , -2.76247692, 21.67804333,
+            #     21.8467445 ,  12.73135856, 29.52351169,
+            # ])
+            par.append([1.84442664, 8.66104699,      1.        , 
+                 -0.79464195, -11.58323324, 14.29676082,
+                 12.54266087,   4.8571578, 20.68036733])
+            par.append([1.84442664,   8.66104699,  1.        , 
+                -0.79464195,  -11.58323324,  14.29676082,
+                 12.54266087,  4.8571578, 20.68036733])
+
+            par.append([0.14989495060633384, 7.7302113553128695, 1.0,
+                 -0.7971531363293334, -13.110360504322951, 25.879187286995972,
+                 3.694158184764616, 0.4519228151825043, 27.67757153055087])
+            par.append([
+                9.335627748627699, 3.551630759332944, 1.0,
+                -12.935181652571138, -45.79489128218752, 53.235138840912846,
+                38.73224218011392, 11.854822890996495, 79.31653941267307
+            ])
+        elif args.molecule == "amp":
+            pass
+            par = []
+            par.append([
+                3.5128614740444695, 4.095576494109553, 1.0, 
+                -4.56390637784709, -23.552059818743686, 0.5736994268111175, 
+                66.90260598124948, 30.819250045900937, 35.32940755299012
+            ])
+            par.append([8.0963607832593, 3.7067654351839607, 1.0,
+             -19.74887434078677, -26.859897609912796, 1.4017760596582391, 
+             84.30873993820705, 32.002524240501344, 52.35361181743063])
+
+        for p in par:
+            test(args.molecule, *p)
