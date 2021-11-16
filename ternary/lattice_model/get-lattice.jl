@@ -125,8 +125,10 @@ function main(xb,xr;n_sweep=1000000,dn=100,n_eq=100)
         Jrw = 0.0; ## solvent-solute2 interaction
         Jbr = 3.0; ## solute1-solute2 interaction
 
-        Jbb = 1.0; Jrr = 1.0; Jbr = -3.0;
-        # Jbb = 2.0; Jrr = 0.0; Jbr = 0.5;
+
+        # Jbb = -1.0; Jrr = -1.0; Jbr = 3.0; # set 1 # associative
+        # Jbb = 1.0; Jrr = 1.0; Jbr = -3.0; # set 2 # segregative case
+        # Jbb = 2.0; Jrr = 0.0; Jbr = 0.5; # set 3 # counter-ionic
 
         M = [Jww Jbw Jrw;
              Jbw Jbb Jbr;
