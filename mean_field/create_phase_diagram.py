@@ -2,7 +2,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib as mpl
 from bp import bp_main
-from numpy.lib.function_base import append
 from optim import Optimizer
 
 import argparse

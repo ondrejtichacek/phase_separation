@@ -31,6 +31,9 @@ int bp_set(
     const double dx,
     const double dy,
     //
+    const double sx,
+    const double sy,
+    //
     const double X[],
     const double Y[],
     //
@@ -42,11 +45,14 @@ int bp_set(
     double xp_[],
     double xm_[],
     //
+    const double z, // lattice connectivity
+    //
     const int N)
 {
     // cout << N << endl;
+    // cout << lp << endl;
 
-    const double z = 6; // lattice connectivity
+    // const double z = 6;
 
     const double dt = 0.1;
     // const double dt = 0.5;
@@ -72,8 +78,11 @@ int bp_set(
         // double cp = X[i] + dx;
         // double cm = Y[i] + dy;
 
-        double cm = X[i] + dx;
-        double cp = Y[i] + dy;
+        double cm = sx * (X[i] + dx);
+        double cp = sy * (Y[i] + dy);
+
+        double logcp = log(cp);
+        double logcm = log(cm);
 
         if (true) //(cp + cm < 1)
         {
@@ -96,17 +105,23 @@ int bp_set(
             do
             {
                 //double Z = 1.+exp(mp) + exp(mm);
-                double Z = l0 + lp * exp(mp) + lm * exp(mm);
 
-                fp = mp + loglp - log(Z * cp);
-                fm = mm + loglm - log(Z * cm);
+                double logZ = log(l0 + lp * exp(mp) + lm * exp(mm));
+
+                fp = mp + loglp - logZ - logcp;
+                fm = mm + loglm - logZ - logcm;
+
+                // double Z = l0 + lp * exp(mp) + lm * exp(mm);
+                //
+                // fp = mp + loglp - log(Z * cp);
+                // fm = mm + loglm - log(Z * cm);
 
                 mp -= fp * dt;
                 mm -= fm * dt;
 
                 k++;
 
-                if (k > 100000)
+                if (k > 1000000)
                     return 1;
 
             } while (fabs(fp) + fabs(fm) > tol);
@@ -162,7 +177,7 @@ int bp_set(
 
                 k++;
 
-                if (k > 100000)
+                if (k > 1000000)
                     return 1;
 
             } while (fabs(fp) + fabs(fm) > tol);
@@ -250,9 +265,12 @@ double calculate_err(
     const int sep[],
     const int sep_exp[],
     const int is_on_boundary[],
-    const int N
+    const int N,
+    const double nmix,
+    const double nsep
 )
 {
+    double e = 0.0;
     double err = 0.0;
     bool all_sep = true;
     bool all_mix = true;
@@ -297,13 +315,86 @@ double calculate_err(
             {
                 if (is_on_boundary[i] == 1)
                 {
-                    err += 2;
+                    e = 2.0;
                 }
                 else
                 {
-                    err++;
+                    e = 1.0;
                 }
+
+                if (sep_exp[i] == 1)
+                {
+                    e /= nsep;
+                }
+                else if (sep_exp[i] == 0)
+                {
+                    e /= nmix;
+                }
+
+                err += e;
             }
+        }
+        err /= N;
+    }
+    return err * 100;
+}
+
+double calculate_continuous_err(
+    const int sep[],
+    const double sep_exp[],
+    const int is_on_boundary[],
+    const int N,
+    const double nmix,
+    const double nsep
+)
+{
+    double e = 0.0;
+    double err = 0.0;
+    bool all_sep = true;
+    bool all_mix = true;
+    bool all_sep_wrong = false;
+
+    for (int i = 0; i < N; i++)
+    {
+        if (sep[i] == true)
+        {
+            all_mix = false;
+            break;
+        }
+    }
+    for (int i = 0; i < N; i++)
+    {
+        if (sep[i] == false)
+        {
+            all_sep = false;
+            break;
+        }
+    }
+    if (all_sep || all_mix || all_sep_wrong)
+    {
+        err = 1.0;
+    }
+    else
+    {
+        for (int i = 0; i < N; i++)
+        {
+            e = sep_exp[i] - sep[i];
+
+            if (is_on_boundary[i] == 1)
+            {
+                e *= 2.0;
+            }
+
+            // if (e > 0)
+            // {
+            //     e /= nsep;
+            // }
+            // else if (e < 0)
+            // {
+            //     e /= nmix;
+            // }
+
+            err += abs(e);
         }
         err /= N;
     }

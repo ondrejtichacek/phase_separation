@@ -37,6 +37,8 @@ cdef extern from "bp_core.cpp":
         double J0m,
         double dx,
         double dy,
+        double sx,
+        double sy,
         double X[],
         double Y[],
         double hX[],
@@ -45,6 +47,7 @@ cdef extern from "bp_core.cpp":
         double mm_[],
         double xp_[],
         double xm_[],
+        double z,
         int N
     ) nogil
 
@@ -65,7 +68,18 @@ cdef extern from "bp_core.cpp":
         int sep[],
         int sep_exp[],
         int is_on_boundary[],
-        int N
+        int N,
+        double nmix,
+        double nsep
+    ) nogil
+    
+    double calculate_continuous_err(
+        int sep[],
+        double sep_exp[],
+        int is_on_boundary[],
+        int N,
+        double nmix,
+        double nsep
     ) nogil
 
 @cython.cdivision(True)
@@ -81,6 +95,8 @@ cdef double core_set(
     double J0,
     double J0p,
     double J0m,
+    double sx,
+    double sy,
     double[:] x,
     double[:] y,
     double[:] hx_xy,
@@ -95,24 +111,29 @@ cdef double core_set(
     double[:] xm_,
     int[:] sep,
     int[:] sep_exp,
+    double[:] sep_exp_cont,
+    int use_continuous_err,
     int[:] is_on_boundary,
+    double z,
     int N,
+    double nmix,
+    double nsep,
     ) nogil:
 
-    cdef double dx = 1e-7
-    cdef double dy = 1e-7
+    cdef double dx = 1e-6
+    cdef double dy = 1e-6
 
     cdef int s = 0
 
-    s = bp_set(lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, 0, 0, &x[0], &y[0], &hx_xy[0], &hy_xy[0], &mp_[0], &mm_[0], &xp_[0], &xm_[0], N)
+    s = bp_set(lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, 0, 0, sx, sy, &x[0], &y[0], &hx_xy[0], &hy_xy[0], &mp_[0], &mm_[0], &xp_[0], &xm_[0], z, N)
     if s > 0:
-        return -1
-    s = bp_set(lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, 0, dy, &x[0], &y[0], &hx_xyp[0], &hy_xyp[0], &mp_[0], &mm_[0], &xp_[0], &xm_[0], N)
+        return 10000
+    s = bp_set(lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, 0, dy, sx, sy, &x[0], &y[0], &hx_xyp[0], &hy_xyp[0], &mp_[0], &mm_[0], &xp_[0], &xm_[0], z, N)
     if s > 0:
-        return -1
-    s = bp_set(lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, dx, 0, &x[0], &y[0], &hx_xpy[0], &hy_xpy[0], &mp_[0], &mm_[0], &xp_[0], &xm_[0], N)
+        return 10000
+    s = bp_set(lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, dx, 0, sx, sy, &x[0], &y[0], &hx_xpy[0], &hy_xpy[0], &mp_[0], &mm_[0], &xp_[0], &xm_[0], z, N)
     if s > 0:
-        return -1
+        return 10000
 
     hess_set(dx, dy,
              &hx_xy[0], &hy_xy[0],
@@ -123,11 +144,18 @@ cdef double core_set(
 
 
     cdef double err = 0.0
-    err = calculate_err(
-        &sep[0],
-        &sep_exp[0],
-        &is_on_boundary[0],
-        N)
+    if use_continuous_err > 0:
+        err = calculate_continuous_err(
+            &sep[0],
+            &sep_exp_cont[0],
+            &is_on_boundary[0],
+            N, nmix, nsep)
+    else:
+        err = calculate_err(
+            &sep[0],
+            &sep_exp[0],
+            &is_on_boundary[0],
+            N, nmix, nsep)
 
     return err
 
@@ -145,6 +173,8 @@ def bp_main(
     double J0,
     double J0p,
     double J0m,
+    double sx,
+    double sy,
     double[:] x,
     double[:] y,
     double[:] hx_xy,
@@ -159,13 +189,19 @@ def bp_main(
     double[:] xm_,
     int[:] sep,
     int[:] sep_exp,
+    double[:] sep_exp_cont,
+    int use_continuous_err,
     int[:] is_on_boundary,
+    double z,
     int N,
+    double nmix,
+    double nsep,
     ):
 
     return core_set(
         lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m,
-        x, y, hx_xy, hy_xy, hx_xpy,
+        sx, sy, x, y, hx_xy, hy_xy, hx_xpy,
         hy_xpy, hx_xyp, hy_xyp,
         mp_, mm_, xp_, xm_,
-        sep, sep_exp, is_on_boundary, N)
+        sep, sep_exp, sep_exp_cont, use_continuous_err,
+        is_on_boundary, z, N, nmix, nsep)
