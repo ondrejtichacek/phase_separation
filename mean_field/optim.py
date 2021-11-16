@@ -8,25 +8,32 @@ import numpy as np
 import subprocess
 from scipy.interpolate import NearestNDInterpolator
 
+from common import timer
+
 from bp import bp_main
 
 class Optimizer():
 
     def __init__(self,
         lattice_connectivity,
-        sel = 'atp',
-        vol_frac_scaling_x = 10,
-        vol_frac_scaling_y = 10,
+        sel,
+        vol_frac_scaling_x = 1,
+        vol_frac_scaling_y = 1,
+        use_cont_err = False,
         ):
 
         self.lattice_connectivity = lattice_connectivity
 
+        self.use_cont_err = use_cont_err
+
         self.sel = sel
-        
-        print(self.sel)
 
         self.vol_frac_scaling_x = vol_frac_scaling_x
         self.vol_frac_scaling_y = vol_frac_scaling_y
+
+        self.logfile = f"log_{self.sel}.txt"
+
+        print(self.sel)
 
     def load_mock_data(self, fname):
 
@@ -35,6 +42,7 @@ class Optimizer():
         x = data[:,0]
         y = data[:,1]
         sep = data[:,2]
+        sep_cont = (1 + data[:,3]) / 2
 
         ind = ((x + y) < 1) & (x > 0) & (y > 0)
 
@@ -46,6 +54,7 @@ class Optimizer():
         self.x = np.ascontiguousarray(x, dtype=np.double)
         self.y = np.ascontiguousarray(y, dtype=np.double)
         self.sep = np.ascontiguousarray(sep, dtype=np.int32)
+        self.sep_cont = np.ascontiguousarray(sep_cont, dtype=np.double)
 
         n = self.x.size
 
@@ -157,17 +166,6 @@ class Optimizer():
         # plt.plot(self.x[self.is_on_boundary == 1], self.y[self.is_on_boundary == 1], 'x')
         # plt.show()
 
-
-    def compile(self):
-        out = subprocess.run(
-                ["make"],
-                capture_output=True)
-
-        if out.returncode != 0:
-            print(out.stdout.decode("utf-8"))
-            print(out.stderr.decode("utf-8"))
-            raise(ValueError("Something went wrong"))
-
     def optimize_cy(self, params, maxiter=1):
 
         x = self.x
@@ -200,7 +198,12 @@ class Optimizer():
         
         sep_model = np.ones(n, dtype=t_bool)
 
+        use_cont_err = t_bool(self.use_cont_err)
+
+        sep_exp_cont = np.ascontiguousarray(self.sep_cont, dtype=t_double)
         is_on_boundary = np.ascontiguousarray(self.is_on_boundary, dtype=t_bool)
+
+        print(use_cont_err)
 
         args = [
             x, y,
@@ -209,6 +212,7 @@ class Optimizer():
             hx_xyp, hy_xyp,
             mp_, mm_, xp_, xm_,
             sep_model, sep_exp,
+            sep_exp_cont, use_cont_err,
             is_on_boundary,
             n, num_mix, num_sep,
         ]
@@ -229,16 +233,16 @@ class Optimizer():
         self.min_cost = np.inf
         self.it = 0
 
-        result = dual_annealing(self.fun_cy, bounds, args)
+        # result = dual_annealing(self.fun_cy, bounds, args)
 
-        # result = differential_evolution(self.fun_cy, bounds, args,
-        #     popsize=popsize,
-        #     # polish=False,
-        #     # recombination=0.2,
-        #     # mutation=(0.5, 1.5)
-        #     workers=1,
-        #     # updating='deferred',
-        #     maxiter=maxiter)
+        result = differential_evolution(self.fun_cy, bounds, args,
+            popsize=popsize,
+            # polish=False,
+            # recombination=0.2,
+            # mutation=(0.5, 1.5)
+            workers=1,
+            # updating='deferred',
+            maxiter=maxiter)
 
         print("best_x: " + " ".join([f"{x:3g}" for x in result.x]))
         print("best_x: " + ", ".join([f"{x:3g}" for x in result.x]))
@@ -247,13 +251,16 @@ class Optimizer():
 
         self.result = result
 
+        with open(self.logfile, 'a') as f:
+            f.write(f"END: {result.fun} " + ", ".join([f"{x:3g}" for x in result.x]) + "\n")
+
     def fun_cy(self, P,
             x, y,
             hx_xy, hy_xy,
             hx_xpy, hy_xpy,
             hx_xyp, hy_xyp,
             mp_, mm_, xp_, xm_,
-            sep, sep_exp,
+            sep, sep_exp, sep_exp_cont, use_cont_err,
             is_on_boundary, n, nmix, nsep):
 
         
@@ -266,18 +273,18 @@ class Optimizer():
         J0 = P[6]
         J0p = P[7]
         J0m = P[8]
-        scale = P[9]
-        rel_scale_y = P[10]
+        scale_x = P[9]
+        scale_y = P[10]
 
         cost = bp_main(
             lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m,
-            scale, scale * rel_scale_y,
+            scale_x, scale_y,
             x, y,
             hx_xy, hy_xy,
             hx_xpy, hy_xpy,
             hx_xyp, hy_xyp,
             mp_, mm_, xp_, xm_,
-            sep, sep_exp,
+            sep, sep_exp, sep_exp_cont, use_cont_err,
             is_on_boundary,
             self.lattice_connectivity,
             n, nmix, nsep)
@@ -291,156 +298,52 @@ class Optimizer():
             print(f"{cost:2g} : " + ", ".join([f"{x:3g}" for x in P]))
             self.min_cost = cost
 
-        return cost
-
-    def fun(self, x, optimize, grid=False):
-        
-        lp = x[0]
-        lm = x[1]
-        l0 = x[2]
-        Jp = x[3]
-        Jm = x[4]
-        Jpm = x[5]
-        J0 = x[6]
-        J0p = x[7]
-        J0m = x[8]
-
-        lim_x = 1
-        lim_y = 1
-
-        cmd = ["./turb_fit",
-            self.f_sep,
-            self.f_mix,
-            f"{int(grid)}", f"{int(optimize)}",
-            f"{lim_x}", f"{lim_y}",
-            f"{self.vol_frac_scaling_x}", f"{self.vol_frac_scaling_y}",
-            f"{lp}", f"{lm}", f"{l0}",
-            f"{Jp}", f"{Jm}", f"{Jpm}",
-            f"{J0}", f"{J0p}", f"{J0m}"]
-
-        # print(" ".join(cmd))
-
-        if optimize:
-            timeout = 10
-        else:
-            timeout = None
-
-        try:
-            out = subprocess.run(cmd,
-                timeout=timeout,
-                capture_output=True)
-
-            if out.returncode != 0:
-                print(out.stdout.decode("utf-8"))
-                print(out.stderr.decode("utf-8"))
-                raise(ValueError("Something went wrong"))
-
-            outstr = out.stdout.decode("utf-8");
-
-            if optimize:
-                cost = np.array(outstr)
-                cost = cost.astype(float)
-            else:
-                cost = np.NaN
-
-        except subprocess.TimeoutExpired as E:
-            cost = np.inf
-            return cost
-
-        # all_costs.append(cost)
+            with open(self.logfile, 'a') as f:
+                f.write(f"{cost:2g} : " + ", ".join([f"{x:3g}" for x in P]) + "\n")
 
         return cost
 
-    def optimize(self, params, maxiter=1):
-        bounds = [params[key] for key in params]
+    @timer
+    def bp_wrapper(self, x, y, lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m,
+            sep_exp=None, sep_exp_cont=None, is_on_boundary=None):
 
-        nc = os.cpu_count() / 2
+        n = x.size
 
-        result = differential_evolution(self.fun, bounds, [True],
-            popsize=int(np.max([12, 2*nc])),
-            maxiter=maxiter,
-            workers=nc,
-            updating='deferred')
+        # memory
+        hx_xy = np.zeros(n)
+        hy_xy = np.zeros(n)
+        hx_xpy = np.zeros(n)
+        hy_xpy = np.zeros(n)
+        hx_xyp = np.zeros(n)
+        hy_xyp = np.zeros(n)
+        mp = np.zeros(n)
+        mm = np.zeros(n)
+        xp = np.zeros(n)
+        xm = np.zeros(n)
 
-        print(" ".join([f"{x}" for x in result.x]))
-        print(result.fun)
+        # dummy data
+        if sep_exp is None:
+            sep_exp = np.ones(n, dtype=np.int32)
+        if sep_exp_cont is None:
+            sep_exp_cont = np.ones(n, dtype=np.double)
+        if is_on_boundary is None:
+            is_on_boundary = np.zeros(n, dtype=np.int32)
 
-        self.result = result
+        # return array
+        sep = np.ones(n, dtype=np.int32)
 
-    def plot_result(self):
-        sep = np.loadtxt('sep')
-        mix = np.loadtxt('mix')
+        is_on_boundary = np.ascontiguousarray(is_on_boundary)
 
-        sep_exp = np.loadtxt(self.f_sep)
-        mix_exp = np.loadtxt(self.f_mix)
+        err = bp_main(
+            lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, 
+            1, 1, 
+            x, y,
+            hx_xy, hy_xy,
+            hx_xpy, hy_xpy,
+            hx_xyp, hy_xyp,
+            mp, mm, xp, xm,
+            sep, sep_exp, sep_exp_cont, self.use_cont_err,
+            is_on_boundary, self.lattice_connectivity, n, 1, 1,
+        )
 
-        sep_exp[:,0] *= self.vol_frac_scaling_x
-        mix_exp[:,0] *= self.vol_frac_scaling_x
-
-        sep_exp[:,1] *= self.vol_frac_scaling_y
-        mix_exp[:,1] *= self.vol_frac_scaling_y
-
-        plt.figure()
-        if sep.size > 0:
-            plt.plot(sep[:,0], sep[:,1], 's')
-        if mix.size > 0:
-            plt.plot(mix[:,0], mix[:,1], 's')
-
-        plt.figure()
-        plt.plot(sep_exp[:,0], sep_exp[:,1], 's')
-        plt.plot(mix_exp[:,0], mix_exp[:,1], 's')
-
-    def plot_result_int(self, xm, ym):
-
-        res = np.loadtxt('result.txt')
-
-        x = res[:,0]
-        y = res[:,1]
-        z = res[:,2]
-
-        sep_exp = np.loadtxt(self.f_sep)
-        mix_exp = np.loadtxt(self.f_mix)
-
-        sep_exp[:,0] *= self.vol_frac_scaling_x
-        mix_exp[:,0] *= self.vol_frac_scaling_x
-
-        sep_exp[:,1] *= self.vol_frac_scaling_y
-        mix_exp[:,1] *= self.vol_frac_scaling_y
-
-        interp_model = NearestNDInterpolator(list(zip(x, y)), z)
-
-        x = np.concatenate([sep_exp[:,0], mix_exp[:,0]])
-        y = np.concatenate([sep_exp[:,1], mix_exp[:,1]])
-        z = np.concatenate([np.zeros_like(sep_exp[:,1]), np.ones_like(mix_exp[:,1])])
-
-        interp_exp = NearestNDInterpolator(list(zip(x, y)), z)
-
-        plt.figure()
-
-        xp = np.linspace(0, xm, 200)
-        yp = np.linspace(0, ym, 200)
-        X, Y = np.meshgrid(xp, yp)
-
-        Z = 1-interp_exp(X, Y)
-        # plt.pcolormesh(X, Y, Z, shading='auto', cmap='bwr', vmin=-1, vmax=1, alpha=0.75)
-        plt.pcolormesh(X, Y, Z, shading='auto', cmap='binary', vmin=0, vmax=3)
-
-        Z = 1-interp_model(X, Y)
-        Z[Z == 0] = np.nan
-        plt.pcolormesh(X, Y, Z, shading='auto', cmap='bwr', vmin=-1, vmax=1, alpha=0.5)
-        # plt.plot(sep[:,0], sep[:,1], "wx", label="sep")
-        plt.legend()
-        plt.show()
-
-    def plot_result_grid(self):
-        res = np.loadtxt('result.txt')
-
-        x = res[:,0]
-        y = res[:,1]
-        z = res[:,2]
-
-        z = np.reshape(z, (256, 256))
-
-        plt.figure()
-        plt.pcolormesh(z)
-        plt.show()
+        return err, sep
