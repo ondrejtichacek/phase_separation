@@ -9,6 +9,10 @@
 
 using namespace std;
 
+#ifndef DO_REACTION
+#define DO_REACTION true
+#endif
+
 #ifndef INTERACTION_WALK
 #define INTERACTION_WALK true
 #endif
@@ -23,6 +27,14 @@ using namespace std;
 
 #ifndef OPEN_SYSTEM
 #define OPEN_SYSTEM false
+#endif
+
+#ifndef VERTICAL_DIFFUSION_OF_PRODUCT
+#define VERTICAL_DIFFUSION_OF_PRODUCT false
+#endif
+
+#ifndef TRANSFORM_PRODUCT_TO_SOLVENT
+#define TRANSFORM_PRODUCT_TO_SOLVENT false
 #endif
 
 #ifndef LATTICE_SIZE
@@ -40,12 +52,35 @@ const int q = NUM_COMPONENTS; // number of enzymes (length of the pathway)
 double I[q + 1][q + 1]; // interaction matrix
 double J[q + 1][q + 1]; // interaction matrix
 
-int spin[L][L]; // lattice variables
+int8_t spin[L][L]; // lattice variables
 int substrate[q + 1][L][L];
 uint l_react[q + 1][L][L];
 
 double volume_frac; // volume fraction of the solutes
 double interaction; // interaction between substrate and enzymes (uniform)
+
+const int diffusion_kernel_size = 3;
+double diffusion_kernel[3][3];
+
+void init_diffusion_kernel()
+{
+//   1/120, 1/60, 1/120
+//   1/60,  9/10, 1/60
+//   1/120, 1/60, 1/120
+
+diffusion_kernel[0][0] = 1/120;
+diffusion_kernel[0][2] = 1/120;
+diffusion_kernel[2][0] = 1/120;
+diffusion_kernel[2][2] = 1/120;
+
+diffusion_kernel[0][1] = 1/60;
+diffusion_kernel[1][0] = 1/60;
+diffusion_kernel[1][2] = 1/60;
+diffusion_kernel[2][1] = 1/60;
+
+diffusion_kernel[1][1] = 9/10;
+
+}
 
 double casual()
 { // a random number uniform in (0,1)
@@ -73,6 +108,33 @@ double stdev(const int array[], int size)
     }
     return sqrt(variance / size);
 }
+
+void convolution_2d_pbc(int a, int b, int k) {
+
+// A = B @ M
+
+// find center position of kernel (half of kernel size)
+// assuming kernel size is odd
+int c = (diffusion_kernel_size - 1) / 2;
+
+for (int i = 0; i < L; i++)              // rows
+{
+    for (int j = 0; j < L; j++)          // columns
+    {
+        for (int m = 0; m < diffusion_kernel_size; m++) // kernel rows
+        {
+            for (int n = 0; n < diffusion_kernel_size; n++) // kernel columns
+            {
+                int ii = (i + (m - c)) % L;
+                int jj = (j + (n - c)) % L;
+
+                // substrate[a][k][i][j] += substrate[b][k][ii][jj] * diffusion_kernel[m][n];
+            }
+        }
+    }
+}
+}
+
 
 void init_interaction()
 {
@@ -204,7 +266,7 @@ double metropolis(const double beta, const double mu)
 
 }
 
-double kawasaki(const double beta)
+double kawasaki(const double beta, const double Ainv, const int s_A)
 { // Kawasaki Montecarlo:  exchange two particles position
     int i1 = int(casual() * L); // orig x
     int j1 = int(casual() * L); // orig y
@@ -271,6 +333,11 @@ double kawasaki(const double beta)
                  + J[spin[i2][j2]][spin[ip1][jm1]]);
         }
 
+        double fac = (1 + substrate[s_A][i1][j1] * Ainv);
+
+        F1 *= fac;
+        F2 *= fac;
+
         double delta = F1 + F2 - G1 - G2; // energy variation for the swap
 
         if (EXTENDED_NEIGHBORHOOD == true)
@@ -334,7 +401,22 @@ double energy()
     return -e;
 }
 
-void diffusion_reaction(const double beta)
+void reaction_new(const double beta)
+{
+    int i = int(casual() * L); // orig x
+    int j = int(casual() * L); // orig y
+
+    int cat = spin[i][j];
+    if (cat > 0){
+        // reaction
+        substrate[cat][i][j] += substrate[cat - 1][i][j];
+        substrate[cat - 1][i][j] = 0;
+    }
+}
+
+int pos[5][2];
+
+void lateral_diffusion(const double beta)
 {
     int i = int(casual() * L); // orig x
     int j = int(casual() * L); // orig y
@@ -343,8 +425,6 @@ void diffusion_reaction(const double beta)
     int im = (L + i - 1) % L; //      x - 1
     int jp = (j + 1) % L;     //      y + 1
     int jm = (L + j - 1) % L; //      y - 1
-
-    int pos[5][2];
 
     pos[0][0] = i;
     pos[0][1] = j;
@@ -361,22 +441,13 @@ void diffusion_reaction(const double beta)
     pos[4][0] = ip;
     pos[4][1] = j;
 
-
-    int cat = spin[i][j];
-    if (cat > 0){
-        // reaction
-        substrate[cat][i][j] += substrate[cat - 1][i][j];
-        substrate[cat - 1][i][j] = 0;
-    }
-
     double delta[5];
     double x[5];
     double P[5];
+    int dS_int[5];
 
     for (int s = 0; s < q + 1; s++)
     {
-        // z ... partition sum
-        double z = 0.0;
 
         delta[0] = I[s][spin[i][j]];
         delta[1] = I[s][spin[i][jm]]; // down interaction
@@ -384,7 +455,9 @@ void diffusion_reaction(const double beta)
         delta[3] = I[s][spin[im][j]]; // left
         delta[4] = I[s][spin[ip][j]]; // right
 
-        
+        // z ... partition sum
+        double z = 0.0;
+
         for (int k = 0; k < 5; k ++)
         {
             delta[k] = - I[s][spin[pos[k][0]][pos[k][1]]];
@@ -392,39 +465,76 @@ void diffusion_reaction(const double beta)
             x[k] = exp(-beta * interaction * delta[k]);
             z += x[k];
         }
-        
-        for (int l = 0; l < substrate[s][i][j]; l++)
-        {
 
-            // cumulative probability
-            double P_cum = 0.0;
+        int S = substrate[s][i][j];
+
+        assert(substrate[s][i][j] >= 0);
+
+        for (int k = 0; k < 5; k++)
+        {
+            P[k] = x[k] / z;
+
+            assert(P[k] >= 0);
+            assert(P[k] <= 1);
+
+            double dS = S * P[k];
+
+            if (dS >= 1)
+            {
+                dS_int[k] = floor(dS);
+                substrate[s][i][j] -= dS_int[k];
+            }
+            else
+            {
+                dS_int[k] = 0;
+            }
+        }
+
+        S = substrate[s][i][j];
+
+        assert(substrate[s][i][j] >= 0);
+        assert(substrate[s][i][j] <= 5);
+
+        for (int l = 0; l < S; l++)
+        {
 
             // random number
             double cas = casual();
+            
+            // cumulative probability
+            double P_cum = 0.0;
 
-            int kk = 0;
-
-            for (int k = 0; k < q + 1; k++){
-                P[k] = x[k] / z;
+            for (int k = 0; k < 5; k++)
+            {
                 P_cum += P[k];
                 if (cas < P_cum)
                 {
-                    kk = k;
+                    dS_int[k]++;
+                    substrate[s][i][j]--;
                     break;
                 }
             }
-
-            substrate[s][i][j] --;
-            substrate[s][pos[kk][0]][pos[kk][1]] ++;
         }
+
+        if (substrate[s][i][j] != 0)
+        {
+            cout << substrate[s][i][j];
+        }
+
+        assert(substrate[s][i][j] == 0);
+
+        for (int k = 0; k < 5; k++)
+        {
+            substrate[s][pos[k][0]][pos[k][1]] += dS_int[k];
+        }
+
+        assert(substrate[s][i][j] >= 0);
+
     }
 }
 
-void product_to_solvent(const int num_convert)
+void product_to_solvent(const int num_convert, const int i, const int j)
 {
-    int i = int(casual() * L);
-    int j = int(casual() * L);
-
     if (substrate[q][i][j] >= num_convert){
         substrate[q][i][j] -= num_convert;
 
@@ -463,18 +573,23 @@ void product_to_solvent(const int num_convert)
 
 }
 
-void bulk_diffusion(const double alpha)
+void vertical_diffusion(
+    const double a, // influx rate
+    const double b, // outflux rate
+    const int i,    // x-ind
+    const int j,    // y-ind
+    const int k     // component
+    )
 {
     // bulk diffusion only with initial substrate
 
-    int i = int(casual() * L);
-    int j = int(casual() * L);
+    int C = substrate[k][i][j];
+    double dC = a - b * C;
 
-    double a = 1;
-    double b = 0.1;
-
-    int C = substrate[0][i][j];
-    double dC = alpha * a - b * C;
+    if (C + dC <= 0){
+        substrate[k][i][j] = 0;
+        return;
+    }
 
     if (dC > 0)
     {
@@ -493,7 +608,7 @@ void bulk_diffusion(const double alpha)
         }
     }
 
-    substrate[0][i][j] = C;
+    substrate[k][i][j] = C;
 }
 
 
@@ -504,34 +619,86 @@ double sweep(
 {    
     double energy_change = 0;
 
-    int K = 10;
+    double scale = 100;
 
-    double scale = 1;
+    // --------------------------------------------------------------
+    // diffusion of substrate #0 from the bulk to the membrane
+    double influx_rate = alpha * scale;
+    double outflux_rate = 0.1;
 
-    int num_convert = 10 * scale;
-
-    if (beta > 0)
+    if (DO_REACTION)
     {
-        for (int i = 0; i < L * L; i++)
+        for (int i = 0; i < L; i++)
         {
-            if (OPEN_SYSTEM)
-                energy_change += metropolis(beta, mu);
-            else
-                energy_change += kawasaki(beta);
-
-            bulk_diffusion(alpha * scale);
-
-            for (int k = 0; k <= K; k++)
+            for (int j = 0; j < L; j++)
             {
-                diffusion_reaction(beta);
-
-                for (int j = 0; j <= 100; j++)
-                {
-                    product_to_solvent(num_convert);
-                }
+                vertical_diffusion(influx_rate, outflux_rate, i, j, 0);
             }
         }
     }
+    // --------------------------------------------------------------
+
+    int K = 1; // number of reaction-diffusion loops
+
+    int substrate_bind_index = q-1; // if q ... product
+    double substrate_bind_scale;
+    if (VERTICAL_DIFFUSION_OF_PRODUCT)
+        substrate_bind_scale = 0.1 / scale;
+    else
+        substrate_bind_scale = 0; // to turn off
+
+    for (int it = 0; it < L * L; it++)
+    {
+        if (OPEN_SYSTEM)
+            energy_change += metropolis(beta, mu);
+        else
+            energy_change += kawasaki(beta, substrate_bind_scale, substrate_bind_index);
+
+        if (DO_REACTION)
+        {
+            for (int k = 0; k < K; k++)
+            {
+                lateral_diffusion(beta);
+
+                reaction_new(beta);
+            }
+        }
+    }
+
+    // --------------------------------------------------------------
+    // diffusion of product (substrate #q) from the membrane to the bulk
+
+    if (DO_REACTION && VERTICAL_DIFFUSION_OF_PRODUCT)
+    {
+        influx_rate = 0;
+        outflux_rate = 0.3;
+
+        for (int i = 0; i < L; i++)
+        {
+            for (int j = 0; j < L; j++)
+            {
+                vertical_diffusion(influx_rate, outflux_rate, i, j, q);
+            }
+        }
+    }
+
+    // --------------------------------------------------------------
+    // product is transformed to solvent
+
+    if (DO_REACTION && TRANSFORM_PRODUCT_TO_SOLVENT)
+    {
+        int num_convert = 20 * scale;
+
+        for (int it = 0; it < L*L; it++)
+        {
+            int i = int(casual() * L);
+            int j = int(casual() * L);
+
+            product_to_solvent(num_convert, i, j);
+        }
+    }
+    // --------------------------------------------------------------
+
     energy_change = energy();
     return energy_change;
 }
@@ -660,20 +827,39 @@ void load_lattice(const double beta)
 void save_lattice(const int t_index)
 {
     char fname[64];
-    sprintf(fname, "lattice_%d.csv", t_index);
-
-    ofstream fout;
-    fout.open(fname);
-
-    for (int i = 0; i < L; i++)
+    
+    bool txt_out = false;
+    
+    if (txt_out) // output as text
     {
-        for (int j = 0; j < L; j++)
+        sprintf(fname, "lattice_%d.csv", t_index);
+
+        ofstream fout;
+        fout.open(fname);
+
+        for (int i = 0; i < L; i++)
         {
-            fout << spin[i][j] << " ";
+            for (int j = 0; j < L; j++)
+            {
+                fout << spin[i][j] << " ";
+            }
+            fout << endl;
         }
-        fout << endl;
+        fout.close();
     }
-    fout.close();
+    else // binary
+    {
+        sprintf(fname, "lattice_%d.bin", t_index);
+
+        ofstream fout;
+        fout.open(fname, std::ios_base::out | std::ios_base::binary);
+
+        for (int i = 0; i < L; i++)
+        {
+            fout.write(reinterpret_cast<const char*>(spin[i]), L * sizeof(spin[i][0]));
+        }
+        fout.close();
+    }
 }
 
 void save_l_react(const int t)
@@ -886,8 +1072,11 @@ void condensation(
         //save_substrate(it);
         save_lattice(it);
 
-        sprintf(fname, "substrate_%d", it);
-        serialize_lattice_array(substrate, q + 1, fname);
+        if (DO_REACTION)
+        {
+            sprintf(fname, "substrate_%d", it);
+            serialize_lattice_array(substrate, q + 1, fname);
+        }
 
         sprintf(fname, "cond_energy.csv");
         save_vector(cond_energy, fname);
@@ -901,6 +1090,7 @@ int core(
     srand(time(0));
 
     init_lattice(volume_frac);
+    init_diffusion_kernel();
 
     bool load_interaction_from_file = true;
 

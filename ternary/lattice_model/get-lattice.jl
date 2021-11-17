@@ -1,4 +1,38 @@
 using DelimitedFiles
+using HDF5
+
+
+"""
+function that computes energy of lattice per site
+requires as constants
+
+L -> lattice size
+
+arguments:
+M -> interaction matrix
+lattice -> instant of a color lattice
+"""
+function lattice_energy(M,lattice;dim=100)
+    ## init energy
+    E = 0.0
+    ## loop over latice
+    for i=1:dim
+        for j=1:dim
+            ## get state of lattice site i,j
+            p = lattice[i,j]
+            ## get neighbourhood
+            pu = lattice[mod1(i-1,dim),j] ## up
+            pd = lattice[mod1(i+1,dim),j] ## down
+            pl = lattice[i,mod1(j-1,dim)] ## left
+            pr = lattice[i,mod1(j+1,dim)] ## right
+            ## get energy
+            E += -(M[p+1,pu+1] + M[p+1,pd+1] + M[p+1,pl+1] + M[p+1,pr+1])
+        end
+    end
+    ## return energy per lattice-side
+    return E
+end
+
 
 """
 function to initialize colored lattice
@@ -103,19 +137,18 @@ main function
 xb -> sovent 1 concentration (blue)
 xr -> sovent 2 concentration (red)
 """
-function main(xb,xr;n_sweep=1000000,dn=100,n_eq=100)
+function main(xb,xr;n_therm=2000000,n_measure=1000,dt=1000,n_anneal=0)
 
     if (xb+xr)<1.0
         
-        dirname = "./lattice_dump/lattice-"*string(xb)*"-"*string(xr)*"/"
-
-        if !isdir(dirname)
-            mkdir(dirname)
-        end
-
-        # n_sweep = 1000000
-        # dn = 100
-        # n_eq = 100
+        fname = "./lattice_dump/lattice-"*string(xb)*"-"*string(xr)*".h5"
+        fid = h5open(fname,"w")
+        create_group(fid,"lattices")
+        g = fid["lattices"]
+        dset = create_dataset(g,"L",datatype(Int64),dataspace(100,100,n_measure),chunk=(100,100,1))
+        create_group(fid,"energy")
+        create_group(fid,"time")
+        create_group(fid,"snapshots")
 
         beta = 1.0
         Jww = 0.0; ## solvent-solvent interaction
@@ -135,12 +168,44 @@ function main(xb,xr;n_sweep=1000000,dn=100,n_eq=100)
              Jrw Jbr Jrr]; ## interaction matrix, M[i+1,j+1]
         lattice = init_lattice([xb,xr]);
 
-        sweep(n_sweep-dn*n_eq,beta,M,lattice)
-
-        for i=1:n_eq
-            sweep(dn,beta,M,lattice)
-            writedlm(dirname*"lattice-"*string(i)*".txt",lattice,',')
+        if n_anneal != 0
+            beta0 = 0.01
+            k = (beta-beta0)/n_anneal
+            d = beta0
+            for t = 0:n0-1
+                b = k*t+d
+                sweep(1,b,M,lattice)
+            end
         end
+
+        energy = [lattice_energy(M,lattice)]
+        tsteps = [0]
+        snapshots = Array{Int64,1}()
+
+        for t = 1:n_therm
+            sweep(1,beta,M,lattice)
+            push!(tsteps,t)
+            push!(energy,lattice_energy(M,lattice))
+        end
+
+        count = 0
+        for t = 1:n_measure*dt
+            sweep(1,beta,M,lattice)
+            push!(energy,lattice_energy(M,lattice))
+            count += 1
+            if count == dt
+                dset[:,:,Int(t/dt)] = lattice
+                push!(snapshots,n_therm+t)
+                count = 0
+            end
+            push!(tsteps,n_therm+t)
+        end
+
+        fid["energy/E"] = energy
+        fid["time/tsteps"] = tsteps
+        fid["snapshots/s"] = snapshots
+
+        close(fid)
 
     end
 

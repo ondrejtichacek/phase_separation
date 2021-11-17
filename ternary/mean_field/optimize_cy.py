@@ -281,6 +281,7 @@ if __name__ == '__main__':
                 pass
                 par = []
                 par.append([1, 1, 1, 0, 2, 0.5, 0, 0, 0, 1, 1])
+                par.append([1, 1, 1, -7.5, 2, 2.2, 0, 0, 0, 1, 1]) # this has almosth the same phase-diagram
                 # par.append([1,   1,   1, -6.63637, 2.18265, 1.22012,   0,   0,   0,   1,   1])
                 # par.append([1,   1,   1, -7.36182, 2.18728, 1.16623,   0,   0,   0,   1,   1])
                 params['mock_3'] = par

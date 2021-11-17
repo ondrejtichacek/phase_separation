@@ -1,6 +1,6 @@
 # conda create -n phase-sep
 # conda activate phase-sep
-# conda install -c conda-forge numpy scipy matplotlib ipykernel tqdm
+# conda install -c conda-forge numpy scipy matplotlib ipykernel tqdm plotly joblib ipywidgets
 
 import os
 import numpy as np
@@ -13,7 +13,7 @@ import functools
 import scipy.optimize
 import hashlib
 import pprint
-
+from numba import jit
 import subprocess
 import shutil
 
@@ -55,7 +55,7 @@ def mock_simulate(**kwargs):
 def simulator(fun, params, dims=None, parallel=True):
     res = []
     if parallel is True:
-        res = Parallel(n_jobs=6, verbose=10) (delayed(fun)(**p) for p in params)
+        res = Parallel(n_jobs=-1, verbose=10) (delayed(fun)(**p) for p in params)
     else:
         for p in params:
             res.append(fun(**p))
@@ -67,10 +67,17 @@ def simulator(fun, params, dims=None, parallel=True):
 
     return res
 
+@jit(nopython=True)
+def find_first_larger(vec, item):
+    for i in range(len(vec)):
+        if vec[i] > item:
+            return i
+    return -1
+
 def find_nearest(a, a0):
     "Element in nd array `a` closest to the scalar value `a0`"
     idx = np.abs(a - a0).argmin()
-    return a.flat[idx]
+    return a.flat[idx], idx
 
 def mu_mean_field(volume_fraction, beta):
     x = volume_fraction
@@ -95,8 +102,15 @@ class LatticePhaseReact():
         beta=1,
         beta_pathway=None,
         
+        do_reaction=True,
+
+        open_system=False,
+
         extended_neighborhood=False,
         log_concentration=False,
+
+        vertical_diffusion_of_product=False,
+        transform_product_to_solvent=False,
 
         resdir=None,
         wrkdir=None):
@@ -132,7 +146,12 @@ class LatticePhaseReact():
 
         self.num_components = num_components
         self.lattice_size = lattice_size
+        self.do_reaction = do_reaction
+        self.open_system = open_system
         self.extended_neighborhood = extended_neighborhood
+
+        self.vertical_diffusion_of_product = vertical_diffusion_of_product
+        self.transform_product_to_solvent = transform_product_to_solvent
 
         self.log_concentration = log_concentration
 
@@ -202,11 +221,12 @@ class LatticePhaseReact():
         CFLAGS = [
             "-march=x86-64",
             "-mtune=native",
-            "-O2",
+            "-O3",
             "-pipe",
             "-fno-plt",
             "-fexceptions",
 	        "-mavx2",
+            "-ffast-math",
             "-Wp,-D_FORTIFY_SOURCE=2",
             "-Wformat",
             "-Werror=format-security",
@@ -219,6 +239,16 @@ class LatticePhaseReact():
             f"-D LATTICE_SIZE={self.lattice_size}",
         ]
 
+        if self.do_reaction is True:
+            DFLAGS.append(f"-D DO_REACTION=1")
+        else:
+            DFLAGS.append(f"-D DO_REACTION=0")
+
+        if self.open_system is True:
+            DFLAGS.append(f"-D OPEN_SYSTEM=1")
+        else:
+            DFLAGS.append(f"-D OPEN_SYSTEM=0")
+
         if self.log_concentration is True:
             DFLAGS.append(f"-D LOG_CONCENTRATION=1")
         else:
@@ -228,6 +258,16 @@ class LatticePhaseReact():
             DFLAGS.append(f"-D EXTENDED_NEIGHBORHOOD=1")
         else:
             DFLAGS.append(f"-D EXTENDED_NEIGHBORHOOD=0")
+
+        if self.vertical_diffusion_of_product is True:
+            DFLAGS.append(f"-D VERTICAL_DIFFUSION_OF_PRODUCT=1")
+        else:
+            DFLAGS.append(f"-D VERTICAL_DIFFUSION_OF_PRODUCT=0")
+
+        if self.transform_product_to_solvent is True:
+            DFLAGS.append(f"-D TRANSFORM_PRODUCT_TO_SOLVENT=1")
+        else:
+            DFLAGS.append(f"-D TRANSFORM_PRODUCT_TO_SOLVENT=0")
 
         out = subprocess.run(
             ["g++"] + CFLAGS + DFLAGS + [self.wrkdir / "react_phase_sep.cpp"],
@@ -303,7 +343,7 @@ class LatticePhaseReact():
                 self.perform_reaction_simulation(interaction, num_sim_react)
         else:
             pfun = lambda x: self.perform_reaction_simulation(x, num_sim_react)
-            Parallel(n_jobs=6, verbose=10) (delayed(pfun)(ir) for ir in self.interaction_range)
+            Parallel(n_jobs=-1, verbose=10) (delayed(pfun)(ir) for ir in self.interaction_range)
 
     def save_sweep(self):
         sim_dir = self.get_dir_condensation()
@@ -576,18 +616,28 @@ class LatticePhaseReact():
             plt.title(f"beta = {beta}")
 
     def get_lattice(self, t_index):
-        sim_dir = self.get_dir_condensation()
-        f_lattice = sim_dir / f'lattice_{t_index:d}.csv'
+        sim_dir = self.get_dir_condensation()      
+
+        txt_out = False
+
+        if txt_out:
+            f_lattice = sim_dir / f'lattice_{t_index:d}.csv'
+        else:
+            f_lattice = sim_dir / f'lattice_{t_index:d}.bin'
         try:
-            data = np.genfromtxt(f_lattice)
+            if txt_out:
+                data = np.genfromtxt(f_lattice, dtype=np.int8)
+            else:
+                data = np.fromfile(f_lattice, dtype='int8')
+                data = np.reshape(data, (self.lattice_size, self.lattice_size))
         except FileNotFoundError as E:
            print(f_lattice)
            raise(E)
         return data
 
-    def plot_lattice(self, beta, ax):
+    def plot_lattice(self, t_index, ax):
 
-        data = self.get_lattice(beta)
+        data = np.asarray(self.get_lattice(t_index), dtype=np.double)
         data[data == 0] = np.NaN
 
         ax.imshow(data, cmap=plt.cm.Spectral, interpolation='none')
@@ -683,17 +733,39 @@ class LatticePhaseReact():
             plt.legend()
 
         return beta_critical
+
+def sigmoidal_fit(xdata, ydata):
+
+    def func(x, z, a, b, c, d, e):
+        return z + a*x + d*(0.5 + np.arctan(b*(x-c))/np.pi) + e
+
+    popt, pcov = scipy.optimize.curve_fit(func, xdata, ydata,
+        p0=(0.0, 0.0, 3, 3, 0.5, 0),
+        bounds=((0, -1, 0, 0, -10, -1), (0.2, 1, 10, 10, 2, 1),))
+
+    inflection_point = popt[3]
     
+    return func, popt, inflection_point,
+
 def beta_critical(x):
-    X, beta = beta_critical_fun()
+    # critical beta for binary system
+
+    X, beta = beta_critical_BP()
     ind = np.where(x < X)[0]
     ind = ind[0:2]
     beta_avg = np.mean(beta[ind])
 
     return beta_avg
-    
 
-def beta_critical_fun():
+def beta_critical_CW(x):
+    # critical beta for binary system
+    # using CW mean field
+    # x ... volume fraction
+    return 1/4/x/(1-x)
+
+def beta_critical_BP():
+    # critical beta for binary system
+    # using BP mean field
     """
     x/(1-x) = w*(w-1)/(exp(beta) - w)
     
@@ -779,3 +851,92 @@ colorscale = [
         [0.9, "rgb(180, 180, 180)"],
         [1.0, "rgb(180, 180, 180)"]
     ]
+
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from ipywidgets import interact
+
+def gui(pathway, res, params, params_range):
+    fig = go.FigureWidget(make_subplots(rows=2, cols=2))
+
+    fig.update_layout(
+        autosize=False,
+        width=800,
+        height=800)
+
+    fig.add_trace(
+        go.Heatmap(
+            colorbar=dict(len=0.5, y=0.5)
+        ),
+        row=1, col=1)
+
+    fig.add_trace(
+        go.Heatmap(
+            colorscale=colorscale,
+            colorbar=dict(len=0.5, y=0.0)),
+        row=1, col=2)
+
+    fig.add_trace(
+        go.Scatter(),
+        row=2, col=1)
+
+    fig.add_trace(
+        go.Scatter(),
+        row=2, col=1)
+
+    fig.add_trace(
+        go.Scatter(),
+        row=2, col=2)
+
+    fig.add_trace(
+        go.Scatter(),
+        row=2, col=2)
+
+    # fig.update_yaxes(
+    #     scaleanchor = "x",
+    #     scaleratio = 1,
+    # )
+
+    p = params[0]
+    p['pathway'] = 0
+
+    nc = params_range['num_components'].max()
+
+    nt = pathway['beta'].size
+    tt = np.arange(nt)
+
+    @interact(**params_range, pathway=(0,nt-1,1), substrate=(0,nc,1))
+    def update(**p):
+        with fig.batch_update():
+
+            i = np.argmin(np.abs(params_range['num_components'] - p['num_components']))
+            j = np.argmin(np.abs(params_range['volume_fraction'] - p['volume_fraction']))
+            
+            t_index = p['pathway']
+
+            PR = res[i,j]
+
+            heat = fig.data[0]
+            heat.z = PR.get_substrate(p['substrate'], t_index)
+
+            heat = fig.data[1]
+            heat.z = PR.get_lattice(t_index)
+
+
+            scat = fig.data[2]
+            scat.x = tt
+            scat.y = pathway['beta']
+
+            scat = fig.data[3]
+            scat.x = [tt[t_index]]
+            scat.y = [pathway['beta'][t_index]]
+
+            scat = fig.data[4]
+            scat.x = tt
+            scat.y = pathway['alpha']
+
+            scat = fig.data[5]
+            scat.x = [tt[t_index]]
+            scat.y = [pathway['alpha'][t_index]]
+
+    return fig
