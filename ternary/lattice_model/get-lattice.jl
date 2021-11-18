@@ -12,7 +12,7 @@ arguments:
 M -> interaction matrix
 lattice -> instant of a color lattice
 """
-function lattice_energy(M,lattice;dim=100)
+function lattice_energy(M,lattice,dim)
     ## init energy
     E = 0.0
     ## loop over latice
@@ -40,7 +40,7 @@ function to initialize colored lattice
 x_vec -> vector of volume fractions
 dim -> lattice dimension (default = 100)
 """
-function init_lattice(x_vec;dim=100)
+function init_lattice(x_vec,dim)
 
     ## length of vector of volume fractions
     len = size(x_vec,1)
@@ -75,7 +75,7 @@ M -> interaction matrix
 lattice -> instant of a color lattice
 dim -> lattice dimension (default = 100)
 """
-function swap(beta,M,lattice;dim=100)
+function swap(beta,M,lattice,dim)
     ## select random lattice site 1
     i1,j1 = rand(1:dim),rand(1:dim)
     p1 = lattice[i1,j1]
@@ -122,10 +122,10 @@ M -> interaction matrix
 lattice -> instant of a color lattice
 n_swaps -> nr of swaps performed in a sweep (default 10000)
 """
-function sweep(n,beta,M,lattice;n_swaps=10000)
+function sweep(n,beta,M,lattice,dim;n_swaps=10000)
     @fastmath @inbounds for i = 1:n
         for j = 1:n_swaps
-            swap(beta,M,lattice)
+            swap(beta,M,lattice,dim)
         end
     end
 end
@@ -137,7 +137,7 @@ main function
 xb -> sovent 1 concentration (blue)
 xr -> sovent 2 concentration (red)
 """
-function main(xb,xr;n_therm=2000000,n_measure=1000,dt=1000,n_anneal=0)
+function main(xb,xr;dim=100,n_therm=1000000,n_measure=1000,dt=1000,n_anneal=10000)
 
     if (xb+xr)<1.0
         
@@ -145,7 +145,7 @@ function main(xb,xr;n_therm=2000000,n_measure=1000,dt=1000,n_anneal=0)
         fid = h5open(fname,"w")
         create_group(fid,"lattices")
         g = fid["lattices"]
-        dset = create_dataset(g,"L",datatype(Int64),dataspace(100,100,n_measure),chunk=(100,100,1))
+        dset = create_dataset(g,"L",datatype(Int64),dataspace(dim,dim,n_measure),chunk=(dim,dim,1))
         create_group(fid,"energy")
         create_group(fid,"time")
         create_group(fid,"snapshots")
@@ -162,11 +162,11 @@ function main(xb,xr;n_therm=2000000,n_measure=1000,dt=1000,n_anneal=0)
         # Jbb = -1.0; Jrr = -1.0; Jbr = 3.0; # set 1 # associative
         # Jbb = 1.0; Jrr = 1.0; Jbr = -3.0; # set 2 # segregative case
         # Jbb = 2.0; Jrr = 0.0; Jbr = 0.5; # set 3 # counter-ionic
-
+        
         M = [Jww Jbw Jrw;
              Jbw Jbb Jbr;
              Jrw Jbr Jrr]; ## interaction matrix, M[i+1,j+1]
-        lattice = init_lattice([xb,xr]);
+        lattice = init_lattice([xb,xr],dim);
 
         if n_anneal != 0
             beta0 = 0.01
@@ -174,7 +174,7 @@ function main(xb,xr;n_therm=2000000,n_measure=1000,dt=1000,n_anneal=0)
             d = beta0
             for t = 0:n0-1
                 b = k*t+d
-                sweep(1,b,M,lattice)
+                sweep(1,b,M,lattice,dim)
             end
         end
 
@@ -183,14 +183,14 @@ function main(xb,xr;n_therm=2000000,n_measure=1000,dt=1000,n_anneal=0)
         snapshots = Array{Int64,1}()
 
         for t = 1:n_therm
-            sweep(1,beta,M,lattice)
+            sweep(1,beta,M,lattice,dim)
             push!(tsteps,t)
             push!(energy,lattice_energy(M,lattice))
         end
 
         count = 0
         for t = 1:n_measure*dt
-            sweep(1,beta,M,lattice)
+            sweep(1,beta,M,lattice,dim)
             push!(energy,lattice_energy(M,lattice))
             count += 1
             if count == dt
