@@ -179,20 +179,20 @@ function main(xb,xr,Jbb,Jrr,Jbr,Jww,Jbw,Jrw;
             end
         end
 
-        energy = [lattice_energy(M,lattice)]
+        energy = [lattice_energy(M,lattice,dim)]
         tsteps = [0]
         snapshots = Array{Int64,1}()
 
         for t = 1:n_therm
             sweep(1,beta,M,lattice,dim)
             push!(tsteps,t)
-            push!(energy,lattice_energy(M,lattice))
+            push!(energy,lattice_energy(M,lattice,dim))
         end
 
         count = 0
         for t = 1:n_measure*dt
             sweep(1,beta,M,lattice,dim)
-            push!(energy,lattice_energy(M,lattice))
+            push!(energy,lattice_energy(M,lattice,dim))
             count += 1
             if count == dt
                 dset[:,:,Int(t/dt)] = lattice
