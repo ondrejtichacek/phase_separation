@@ -137,7 +137,8 @@ main function
 xb -> sovent 1 concentration (blue)
 xr -> sovent 2 concentration (red)
 """
-function main(xb,xr;dim=100,n_therm=1000000,n_measure=1000,dt=1000,n_anneal=10000)
+function main(xb,xr,Jbb,Jrr,Jbr,Jww,Jbw,Jrw;
+    dim=100,n_therm=1000000,n_measure=1000,dt=1000,n_anneal=10000)
 
     if (xb+xr)<1.0
         
@@ -151,12 +152,12 @@ function main(xb,xr;dim=100,n_therm=1000000,n_measure=1000,dt=1000,n_anneal=1000
         create_group(fid,"snapshots")
 
         beta = 1.0
-        Jww = 0.0; ## solvent-solvent interaction
-        Jbb = -1.0; ## solute1-solute1 interaction
-        Jrr = -1.0; ## solute2-solute2 interaction
-        Jbw = 0.0; ## solvent-solute1 interaction
-        Jrw = 0.0; ## solvent-solute2 interaction
-        Jbr = 3.0; ## solute1-solute2 interaction
+        # Jww = 0.0; ## solvent-solvent interaction
+        # Jbb = -1.0; ## solute1-solute1 interaction
+        # Jrr = -1.0; ## solute2-solute2 interaction
+        # Jbw = 0.0; ## solvent-solute1 interaction
+        # Jrw = 0.0; ## solvent-solute2 interaction
+        # Jbr = 3.0; ## solute1-solute2 interaction
 
 
         # Jbb = -1.0; Jrr = -1.0; Jbr = 3.0; # set 1 # associative
@@ -172,7 +173,7 @@ function main(xb,xr;dim=100,n_therm=1000000,n_measure=1000,dt=1000,n_anneal=1000
             beta0 = 0.01
             k = (beta-beta0)/n_anneal
             d = beta0
-            for t = 0:n0-1
+            for t = 0:n_anneal
                 b = k*t+d
                 sweep(1,b,M,lattice,dim)
             end
@@ -212,4 +213,6 @@ function main(xb,xr;dim=100,n_therm=1000000,n_measure=1000,dt=1000,n_anneal=1000
 end
 
 ## execute main function with command line arguments as input
-main(parse(Float64,ARGS[1]),parse(Float64,ARGS[2]))
+main(parse(Float64,ARGS[1]),parse(Float64,ARGS[2]),
+    parse(Float64,ARGS[3]),parse(Float64,ARGS[4]),parse(Float64,ARGS[5]),
+        parse(Float64,ARGS[6]),parse(Float64,ARGS[7]),parse(Float64,ARGS[8]))
