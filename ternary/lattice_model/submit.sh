@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH -J lattice
-#SBATCH --qos=matlab
+#SBATCH --qos=long
 #SBATCH --partition=cpu,scpu,bfill
-#SBATCH --time=0-12:00
+#SBATCH --time=2-00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --exclusive
@@ -15,7 +15,15 @@ spack load julia
 spack load parallel
 
 doit() {
-    time julia get-lattice.jl $1 $2
+    # set 1 # associative
+    time julia get-lattice.jl $1 $2 -1.0  -1.0   3.0   0.0   0.0   0.0
+    
+    # set 2 # segregative case
+    # time julia get-lattice.jl $1 $2  1.0   1.0  -3.0   0.0   0.0   0.0
+    
+    # set 3 # counter-ionic
+    # time julia get-lattice.jl $1 $2  2.0   0.0   0.5   0.0   0.0   0.0
+    
 }
 export -f doit
 
