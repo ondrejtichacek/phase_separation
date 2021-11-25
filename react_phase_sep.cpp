@@ -22,7 +22,7 @@ using namespace std;
 #endif
 
 #ifndef EXTENDED_NEIGHBORHOOD
-#define EXTENDED_NEIGHBORHOOD true
+#define EXTENDED_NEIGHBORHOOD false
 #endif
 
 #ifndef OPEN_SYSTEM
@@ -53,11 +53,14 @@ double I[q + 1][q + 1]; // interaction matrix
 double J[q + 1][q + 1]; // interaction matrix
 
 int8_t spin[L][L]; // lattice variables
+double ener[L][L]; // energy at lattice points
+bool ener_current[L][L];
+
 int substrate[q + 1][L][L];
 uint l_react[q + 1][L][L];
 
 double volume_frac; // volume fraction of the solutes
-double interaction; // interaction between substrate and enzymes (uniform)
+// double interaction; // interaction between substrate and enzymes (uniform)
 
 const int diffusion_kernel_size = 3;
 double diffusion_kernel[3][3];
@@ -204,6 +207,9 @@ void init_lattice(const double conc)
     { // filling the lattice with volume fraction "conc" at random (beta=0)
         for (int j = 0; j <= L - 1; j++)
         {
+            ener[i][j] = 0;
+            ener_current[i][j] = 0;
+
             double cas = casual();
             spin[i][j] = 0;
             for (int k = 1; k <= q; k++)
@@ -266,6 +272,45 @@ double metropolis(const double beta, const double mu)
 
 }
 
+// double dEnergy(
+//     double dE[],
+//     const int s, 
+//     const int i, const int j,
+//     const int im, const int jm,
+//     const int ip, const int jp)
+// {
+//     dE[0] = J[s][spin[i][jm]]; // down interaction
+//     dE[1] = J[s][spin[i][jp]]; // up
+//     dE[2] = J[s][spin[im][j]]; // left
+//     dE[3] = J[s][spin[ip][j]]; // right
+
+//     return dE[0] + dE[1] + dE[2] + dE[3]; 
+// }
+
+// void updateEnergy(
+//     double dE[],
+//     const int i, const int j,
+//     const int im, const int jm,
+//     const int ip, const int jp)
+// {
+//     ener[i][jm] += dE[0];
+//     ener[i][jp] += dE[1];
+//     ener[im][j] += dE[2];
+//     ener[ip][j] += dE[3];
+// }
+
+double dEnergy(
+    const int s, 
+    const int i, const int j,
+    const int im, const int jm,
+    const int ip, const int jp)
+{
+    return (J[s][spin[i][jm]]   // down interaction
+          + J[s][spin[i][jp]]   // up
+          + J[s][spin[im][j]]   // left
+          + J[s][spin[ip][j]]); // right
+}
+
 double kawasaki(const double beta, const double Ainv, const int s_A)
 { // Kawasaki Montecarlo:  exchange two particles position
     int i1 = int(casual() * L); // orig x
@@ -284,31 +329,61 @@ double kawasaki(const double beta, const double Ainv, const int s_A)
 
     double energy_change = 0.0;
 
+    // double dG1[4];
+    // double dG2[4];
+
     if (spin[i1][j1] != spin[i2][j2])
     {
-        // energy contribution of spot 1 ORIG
-        double F1 = (J[spin[i1][j1]][spin[i1][jm1]]   // down interaction
-                   + J[spin[i1][j1]][spin[i1][jp1]]   // up
-                   + J[spin[i1][j1]][spin[im1][j1]]   // left
-                   + J[spin[i1][j1]][spin[ip1][j1]]); // right
 
+        if (   (j1 == j2 && ( i1 == ip2 || i1 == im2 ))
+            || (i1 == i2 && ( j1 == jp2 || j1 == jm2 )))
+        {
+            return 0.0;
+        }
+
+        double F1;
+        // energy contribution of spot 1 ORIG
+        if (false) //(ener_current[i1][j1])
+        {
+            F1 = ener[i1][j1];
+        }
+        else
+        {
+            F1 = dEnergy(spin[i1][j1], i1, j1, im1, jm1, ip1, jp1);
+            // double F1 = (J[spin[i1][j1]][spin[i1][jm1]]   // down interaction
+            //            + J[spin[i1][j1]][spin[i1][jp1]]   // up
+            //            + J[spin[i1][j1]][spin[im1][j1]]   // left
+            //            + J[spin[i1][j1]][spin[ip1][j1]]); // right
+        }
+
+        double F2;
         // energy contribution of spot 2 ORIG
-        double F2 = (J[spin[i2][j2]][spin[i2][jm2]]   
-                   + J[spin[i2][j2]][spin[i2][jp2]]
-                   + J[spin[i2][j2]][spin[im2][j2]]
-                   + J[spin[i2][j2]][spin[ip2][j2]]);
+        if (false) //(ener_current[i2][j2])
+        {
+            F2 = ener[i2][j2];
+        }
+        else
+        {
+            F2 = dEnergy(spin[i2][j2], i2, j2, im2, jm2, ip2, jp2);
+            // double F2 = (J[spin[i2][j2]][spin[i2][jm2]]   
+            //            + J[spin[i2][j2]][spin[i2][jp2]]
+            //            + J[spin[i2][j2]][spin[im2][j2]]
+            //            + J[spin[i2][j2]][spin[ip2][j2]]);
+        }
 
         // energy contribution of spot 1 NEW
-        double G1 = (J[spin[i1][j1]][spin[i2][jm2]]
-                   + J[spin[i1][j1]][spin[i2][jp2]]
-                   + J[spin[i1][j1]][spin[im2][j2]]
-                   + J[spin[i1][j1]][spin[ip2][j2]]);
+        double G1 = dEnergy(spin[i1][j1], i2, j2, im2, jm2, ip2, jp2);
+        // double G1 = (J[spin[i1][j1]][spin[i2][jm2]]
+        //            + J[spin[i1][j1]][spin[i2][jp2]]
+        //            + J[spin[i1][j1]][spin[im2][j2]]
+        //            + J[spin[i1][j1]][spin[ip2][j2]]);
 
         // energy contribution of spot 2 NEW
-        double G2 = (J[spin[i2][j2]][spin[i1][jm1]]
-                   + J[spin[i2][j2]][spin[i1][jp1]]
-                   + J[spin[i2][j2]][spin[im1][j1]]
-                   + J[spin[i2][j2]][spin[ip1][j1]]);
+        double G2 = dEnergy(spin[i2][j2], i1, j1, im1, jm1, ip1, jp1);
+        // double G2 = (J[spin[i2][j2]][spin[i1][jm1]]
+        //            + J[spin[i2][j2]][spin[i1][jp1]]
+        //            + J[spin[i2][j2]][spin[im1][j1]]
+        //            + J[spin[i2][j2]][spin[ip1][j1]]);
 
         if (EXTENDED_NEIGHBORHOOD == true)
         {
@@ -364,8 +439,25 @@ double kawasaki(const double beta, const double Ainv, const int s_A)
         {
             int sp1 = spin[i1][j1];
             int sp2 = spin[i2][j2];
+
             spin[i2][j2] = sp1;
             spin[i1][j1] = sp2;
+
+            ener[i1][j1] = G2;
+            ener[i2][j2] = G1;
+
+            ener_current[i1][j1] = true;
+            ener_current[i2][j2] = true;
+
+            ener_current[i1][jm1] = false;
+            ener_current[i1][jp1] = false;
+            ener_current[im1][j1] = false;
+            ener_current[ip1][j1] = false;
+
+            ener_current[i2][jm2] = false;
+            ener_current[i2][jp2] = false;
+            ener_current[im2][j2] = false;
+            ener_current[ip2][j2] = false;
         }
 
         energy_change = delta * news;
@@ -416,7 +508,7 @@ void reaction_new(const double beta)
 
 int pos[5][2];
 
-void lateral_diffusion(const double beta)
+void lateral_diffusion(const double beta, const double inter)
 {
     int i = int(casual() * L); // orig x
     int j = int(casual() * L); // orig y
@@ -462,7 +554,7 @@ void lateral_diffusion(const double beta)
         {
             delta[k] = - I[s][spin[pos[k][0]][pos[k][1]]];
 
-            x[k] = exp(-beta * interaction * delta[k]);
+            x[k] = exp(-beta * inter * delta[k]);
             z += x[k];
         }
 
@@ -658,7 +750,8 @@ double sweep(
         {
             for (int k = 0; k < K; k++)
             {
-                lateral_diffusion(beta);
+                double inter = 1;
+                lateral_diffusion(beta, inter);
 
                 reaction_new(beta);
             }
@@ -720,7 +813,7 @@ int time_to_react(const double F, const double interaction, const int react_coun
 
     do
     {
-        l_react[pos[0]][pos[1]][counter] += 1;
+        // l_react[pos[0]][pos[1]][counter] += 1;
 
         if (spin[pos[0]][pos[1]] == counter + 1)
         {
@@ -917,6 +1010,19 @@ void load_sweep_vars(
     }
 }
 
+void load_range_vars(
+    vector<double> &interaction)
+{
+    double v;
+    
+    ifstream f0("range_interaction.csv");
+    if (f0.is_open()) {
+        while (f0.good()) {
+            f0 >> v;
+            interaction.push_back(v);
+        }
+    }
+}
 
 void load_interaction()
 {
@@ -1033,7 +1139,7 @@ void reaction(
         for (int i = 0; i < sim_react; i++)
         {
             // simulate the pathway
-            tempo[i] = time_to_react(interaction * b, interaction, i);
+            // tempo[i] = time_to_react(interaction * b, interaction, i);
         }
 
         sprintf(fname, "reaction_tempo.csv");
@@ -1048,7 +1154,9 @@ void condensation(
     vector<double> &alpha,
     vector<double> &beta,
     vector<double> &mu,
-    const int sim_cond)
+    vector<double> &interaction,
+    const int sim_cond,
+    const int sim_react)
 {
     vector<double> cond_energy(sim_cond);
 
@@ -1056,6 +1164,8 @@ void condensation(
     
     assert (beta.size() == mu.size());
     assert (beta.size() == alpha.size());
+
+    vector<int> tempo(sim_react);
 
     for (int it = 0; it < beta.size(); it++)
     {
@@ -1067,6 +1177,18 @@ void condensation(
         {
             // simulate the condensation            
             cond_energy[i] = sweep(b, m, a);
+        }
+        
+        for (int j = 0; j < interaction.size(); j++)
+        {
+            for (int i = 0; i < sim_react; i++)
+            {
+                // simulate the pathway
+                tempo[i] = time_to_react(interaction[j] * b, interaction[j], i);
+            }
+
+            sprintf(fname, "reaction_tempo_%d.csv", j);
+            save_vector(tempo, fname);
         }
 
         //save_substrate(it);
@@ -1111,15 +1233,19 @@ int core(
     
     load_sweep_vars(alpha, beta, mu);
 
+    vector<double> interaction;
+    load_range_vars(interaction);
+
     if (sim_cond > 0)
     {
-        condensation(alpha, beta, mu, sim_cond);
+        condensation(alpha, beta, mu, interaction, sim_cond, sim_react);
     }
 
-    if (sim_react > 0)
-    {
-        reaction(beta, mu, sim_react);
-    }
+    // OUTDATED FOR NOW
+    // if (sim_react > 0)
+    // {
+    //     reaction(beta, mu, sim_react);
+    // }
 
     return 0;
 }
@@ -1128,10 +1254,10 @@ int main(int argc, char **argv)
 {
     int i = 0;
 
-    i++;
-    interaction = 1;
-    if (argc > i)
-        interaction = atof(argv[i]);
+    // i++;
+    // interaction = 1;
+    // if (argc > i)
+    //     interaction = atof(argv[i]);
 
     i++;
     volume_frac = 0.3;

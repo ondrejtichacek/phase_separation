@@ -9,6 +9,7 @@ from scipy.optimize import curve_fit
 import matplotlib
 import matplotlib.pyplot as plt
 import pandas as pd
+import h5py
 
 from numpy.polynomial import Polynomial
 
@@ -18,29 +19,6 @@ def gkern(kernlen=21, std=3):
     gkern2d = np.outer(gkern1d, gkern1d)
     gkern2d /= np.sum(gkern2d.flatten())
     return gkern2d
-
-# kernel = []
-
-# if False:
-#     for ws in [5, 9, 13, 17, 21]:
-#         W = np.ones((ws,ws))
-#         W /= np.sum(W.flatten())
-#         kernel.append(W)
-# else:
-#     kernel.append(gkern(1+20,5))
-#     # kernel.append(gkern(1+40,5*2))
-
-# def plot_kernel():
-#     plt.figure()
-#     W = np.zeros_like(kernel[0])
-#     for K in kernel:
-#         W = W + K
-#     W = W / len(kernel)
-#     plt.imshow(W)
-#     plt.colorbar()
-#     # print(np.sum(W.flatten()))
-
-
 
 cmap = matplotlib.cm.jet.copy()
 cmap.set_bad('white', 1.)
@@ -57,21 +35,18 @@ cmap_mix.set_bad('white', 1.)
 def gauss(x, mu, sigma):
     return np.exp(-(((x - mu) / sigma)**2)/2) / (sigma * np.sqrt(2 * np.pi))
 
-def load_data(res_folder, components_equal=False, load_fraction=1):
+def load_txt_data(res_folder, load_fraction=1):
+
+    XB = []
+    XR = []
+    AA = []
+    NN = []
+
+    pattern = re.compile(r'lattice-([+-]?(?:[0-9]*[.])?[0-9]+)-([+-]?(?:[0-9]*[.])?[0-9]+)')
 
     dirs = os.listdir(res_folder)
 
     assert(len(dirs) > 0)
-
-    XB = []
-    XR = []
-    ST = []
-    AA = []
-    NN = []
-
-    results = []
-
-    pattern = re.compile(r'lattice-([+-]?(?:[0-9]*[.])?[0-9]+)-([+-]?(?:[0-9]*[.])?[0-9]+)')
 
     for di in tqdm(dirs):
 
@@ -95,7 +70,70 @@ def load_data(res_folder, components_equal=False, load_fraction=1):
         AA.append(A)
         NN.append(di)
 
-        st, res = analyse_phase_sep(A, name=di, components_equal=components_equal)
+    return XB, XR, AA, NN
+
+def load_hdf5_data(res_folder, load_fraction=1):
+
+    XB = []
+    XR = []
+    AA = []
+    NN = []
+
+    pattern = re.compile(r'lattice-([+-]?(?:[0-9]*[.])?[0-9]+)-([+-]?(?:[0-9]*[.])?[0-9]+)\.h5')
+
+    files = os.listdir(res_folder)
+
+    assert(len(files) > 0)
+
+    for fname in tqdm(files):
+
+        if load_fraction < 1:
+            if np.random.rand() > load_fraction:
+                # skip this data
+                continue
+
+        m = pattern.match(fname)
+        if not m:
+            raise(ValueError(f"Can't load {fname}"))
+
+        XB.append(float(m.group(1)))
+        XR.append(float(m.group(2)))
+
+        f = h5py.File(res_folder / fname, 'r')
+
+        # print(list(f.keys()))
+        energy = f['energy']['E']
+        lattices = f['lattices']['L']
+        snapshots = f['snapshots']['s']
+        time = f['time']['tsteps']
+
+        # print(lattices.shape)
+
+        nt = lattices.shape[0]
+
+        stride = 1
+
+        A = [lattices[i,:,:] for i in range(0, nt, stride)]
+
+        AA.append(A)
+        NN.append('')
+
+    return XB, XR, AA, NN
+
+def load_data(res_folder, components_equal=False, load_fraction=1):
+
+    results = []
+    ST= []
+
+    txt_mode = False
+
+    if txt_mode:
+        XB, XR, AA, NN = load_txt_data(res_folder, load_fraction=load_fraction)
+    else:
+        XB, XR, AA, NN = load_hdf5_data(res_folder, load_fraction=load_fraction)
+
+    for (A, name) in zip(tqdm(AA), NN):
+        st, res = analyse_phase_sep(A, name=name, components_equal=components_equal)
         ST.append(st)
         results.append(res)
 

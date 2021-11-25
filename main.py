@@ -3,6 +3,7 @@
 # conda install -c conda-forge numpy scipy matplotlib ipykernel tqdm plotly joblib ipywidgets
 
 import os
+from ipywidgets.widgets import interaction
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
@@ -16,6 +17,9 @@ import pprint
 from numba import jit
 import subprocess
 import shutil
+from numpy.polynomial import Polynomial
+
+from ternary.lattice_model.process import load_data, analyse_phase_sep, plot_phase_sep, plot_phase_sep_norm, iso_fraction_cut, phase_sep_boundary, gkern, get_sep_norm, save_phase_sep_norm
 
 def test_parameter_product():
     PAR = {
@@ -115,6 +119,8 @@ class LatticePhaseReact():
         resdir=None,
         wrkdir=None):
 
+        self._energy = None
+
         self.interaction_range = interaction_range
         self.volume_fraction = volume_fraction
 
@@ -187,11 +193,14 @@ class LatticePhaseReact():
 
     def get_patwhay_hash(self):
 
-        hashfun = lambda a: hashlib.blake2b(a, digest_size=8, usedforsecurity=False)
+        hashfun = lambda a: hashlib.blake2b(a, digest_size=32, usedforsecurity=False)
         
-        s = ""
-        s += hashfun(self.beta_pathway.tostring()).hexdigest()
-        s += hashfun(self.chemical_potential_pathway.tostring()).hexdigest()
+        s = self.beta_pathway.tostring()
+        s += self.chemical_potential_pathway.tostring()
+        s += self.J.tostring()
+        s += self.I.tostring()
+
+        s = hashfun(s).hexdigest()
 
         return s
 
@@ -278,7 +287,7 @@ class LatticePhaseReact():
             print(out.stderr.decode("utf-8"))
             raise(ValueError("Something went wrong"))
 
-    def simulate_condensation(self, num_sim_cond=1000):
+    def simulate_condensation(self, num_sim_cond=1000, num_sim_react=0, interaction=1):
 
         sim_dir = self.get_dir_condensation()
         
@@ -290,16 +299,17 @@ class LatticePhaseReact():
         print(sim_dir)
 
         self.save_condensate_interaction_matrix()
+        self.save_reaction_interaction_matrix()
 
         self.make(wrkdir=sim_dir)
 
         self.save_sweep()
+        self.save_range()
 
         cmd = ["./a.out",
-            f"0",
             f"{self.volume_fraction}",
             f"{num_sim_cond}",
-            f"0",]
+            f"{num_sim_react}",]
 
         print(" ".join(cmd))
 
@@ -310,6 +320,9 @@ class LatticePhaseReact():
             print(out.stdout.decode("utf-8"))
             print(out.stderr.decode("utf-8"))
             raise(ValueError("Something went wrong"))
+
+        # print(out.stdout.decode("utf-8"))
+        # print(out.stderr.decode("utf-8"))
 
     def perform_reaction_simulation(self, interaction, num_sim_react):
 
@@ -325,7 +338,6 @@ class LatticePhaseReact():
         os.chdir(sim_dir)
 
         out = subprocess.run(["./a.out",
-            f"{interaction}",
             f"{self.volume_fraction}",
             f"0",
             f"{num_sim_react}"],
@@ -352,7 +364,14 @@ class LatticePhaseReact():
         np.savetxt(sim_dir / "sweep_beta.csv", self.beta_pathway, fmt='%f')
         np.savetxt(sim_dir / "sweep_mu.csv", self.chemical_potential_pathway, fmt='%f')
 
-    def generate_reaction_interaction(self, ver="ones", r=0.4, s=0.2):
+    def save_range(self):
+        sim_dir = self.get_dir_condensation()
+
+        np.savetxt(sim_dir / "range_interaction.csv", self.interaction_range, fmt='%f')
+
+    def generate_reaction_interaction(self, ver="ones", r=0.4, s=0.2, seed=42):
+
+        np.random.seed(seed)
 
         self.reaction_interaction_version = ver
 
@@ -404,7 +423,9 @@ class LatticePhaseReact():
 
         self.I = I
 
-    def generate_condensate_interaction(self, ver="ones", r=0.4, s=0.2):
+    def generate_condensate_interaction(self, ver="ones", r=0.4, s=0.2, seed=42):
+
+        np.random.seed(seed)
 
         self.condensation_interaction_version = ver
 
@@ -506,6 +527,90 @@ class LatticePhaseReact():
 
         return time_to_react, time_to_react_err
 
+    def plot_time_to_react_new(self):
+
+        Y = []
+        Z = []
+        E = []
+
+        for i, interaction in enumerate(self.interaction_range):
+
+            # sim_dir = self.get_dir_reaction(interaction)
+            sim_dir = self.get_dir_condensation()
+
+            data = np.genfromtxt(sim_dir / f'reaction_tempo_{i}.csv')
+            
+            y = np.mean(data, axis=1)
+            z = np.std(data, axis=1)
+            e = np.std(data, axis=1) / np.sqrt(data.shape[1])
+
+            x = self.beta_pathway
+
+            y = y[:x.size]
+            z = z[:x.size]
+            e = e[:x.size]
+
+            # print(x.shape)
+            # print(y.shape)
+
+            Y.append(y)
+            Z.append(z)
+            E.append(e)
+
+        colors = plt.cm.Spectral(np.linspace(0, 1, self.interaction_range.size))
+
+        plt.figure()
+
+        for i, interaction in enumerate(self.interaction_range):
+
+            x = self.beta_pathway
+            y = Y[i]
+            e = E[i]
+
+            plt.plot(x, y, color=colors[i], alpha=0.3)
+            plt.fill_between(x, y-e, y+e, alpha=0.2, edgecolor=colors[i], facecolor=colors[i])
+            # plt.xlim((0,4))
+            # plt.ylim((0,30000))
+
+        for i, interaction in enumerate(self.interaction_range):
+
+            x = self.beta_pathway
+            y = Y[i]
+            e = E[i]
+
+            yy = moving_average(y, N=20)
+            plt.plot(x, yy, color=colors[i])
+
+        plt.xlabel("beta ~ organization")
+        plt.ylabel("time to react")
+
+        plt.title("reaction time mean +- std error of mean")
+
+        sm = plt.cm.ScalarMappable(cmap=plt.cm.Spectral, norm=matplotlib.colors.Normalize(vmin=min(self.interaction_range), vmax=max(self.interaction_range)))
+        cbar = plt.colorbar(sm)
+        cbar.ax.set_ylabel("interaction")
+
+        plt.figure()
+
+        for i, interaction in enumerate(self.interaction_range):
+
+            x = self.beta_pathway
+            z = Z[i]
+
+            plt.plot(x, z, color=colors[i], alpha=0.3)
+            
+            zz = moving_average(z, N=20)
+            plt.plot(x, zz, color=colors[i])
+        
+        plt.xlabel("beta ~ organization")
+        plt.ylabel("std time to react")
+
+        plt.title("reaction time standard deviation")
+
+        sm = plt.cm.ScalarMappable(cmap=plt.cm.Spectral, norm=matplotlib.colors.Normalize(vmin=min(self.interaction_range), vmax=max(self.interaction_range)))
+        cbar = plt.colorbar(sm)
+        cbar.ax.set_ylabel("interaction")
+
     def plot_time_to_react(self):
 
         colors = plt.cm.Spectral(np.linspace(0, 1, self.interaction_range.size))
@@ -564,16 +669,26 @@ class LatticePhaseReact():
     @property
     def condensation_energy(self):
 
-        sim_dir = self.get_dir_condensation()
+        if self._energy is None:
 
-        E = np.zeros(self.beta_pathway.size)
+            sim_dir = self.get_dir_condensation()
+            # print(sim_dir / 'cond_energy.csv')
+            E = np.zeros(self.beta_pathway.size)
+            try:
+                data = np.genfromtxt(str(sim_dir / 'cond_energy.csv'))
+            except FileNotFoundError as e:
+                print(sim_dir / 'cond_energy.csv')
+                raise(e)
 
-        data = np.genfromtxt(sim_dir / f'cond_energy.csv')
+            for j, beta in enumerate(self.beta_pathway):
 
-        for j, beta in enumerate(self.beta_pathway):
+                E[j] = np.mean(data[j,:])
+        
+            self._energy = E
 
-            E[j] = np.mean(data[j,:])
-            
+        else:
+            E = self._energy
+
         return E
 
     def plot_condensation_convergence(self):
@@ -635,16 +750,37 @@ class LatticePhaseReact():
            raise(E)
         return data
 
-    def plot_lattice(self, t_index, ax):
+    def plot_lattice(self, t_index, ax, kw={}):
 
         data = np.asarray(self.get_lattice(t_index), dtype=np.double)
         data[data == 0] = np.NaN
 
-        ax.imshow(data, cmap=plt.cm.Spectral, interpolation='none')
+        ax.imshow(data,
+            cmap=plt.cm.Spectral,
+            interpolation='none',
+            **kw)
         ax.set_xticks([])
         ax.set_yticks([])
 
-    @functools.cache
+    def save_lattice_to_images(self):
+
+        for t_index, beta in enumerate(self.beta_pathway):
+
+            data = np.asarray(self.get_lattice(t_index), dtype=np.double)
+            data[data == 0] = np.NaN
+
+            # a colormap and a normalization instance
+            cmap = plt.cm.Spectral
+            norm = plt.Normalize(vmin=data.min(), vmax=data.max())
+
+            # map the normalized data to colors
+            image = cmap(norm(data))
+
+            # save the image
+            plt.imsave('lattice_%05d.png', image)
+        
+
+    # @functools.cache
     def get_substrate(self, product, t_index):
         sim_dir = self.get_dir_condensation()
 
@@ -652,7 +788,7 @@ class LatticePhaseReact():
 
         return data
 
-    @functools.cache
+    # @functools.cache
     def get_reaction_flux(self, interaction, product, beta):
         
         sim_dir = self.get_dir_reaction(interaction)
@@ -704,25 +840,73 @@ class LatticePhaseReact():
                 cmap=plt.cm.magma_r, interpolation='none', resample=False)#, vmin=-m, vmax=m)
             # ax2.title(f"{beta}")
 
+    def analyse_phase_sep_image(self, component, nt, delta=10):
+
+        tt = np.arange(delta, nt - delta, 2*delta+1)
+        beta = self.beta_pathway[tt]
+        sep_norm = np.zeros_like(beta)
+
+        for it, t in enumerate(tt):
+            AA = []
+            for dt in np.arange(-delta, delta+1):
+                A = self.get_lattice(t + dt)
+                AA.append(A)
+
+            st, st_ext = analyse_phase_sep(AA, '')
+            sep_norm[it] = st_ext[component]['sep_norm']
+
+        sim_dir = self.get_dir_condensation()
+
+        np.savez(sim_dir / "ph_sep_image_res.npz", beta=beta, sep_norm=sep_norm)
+
+        self.sep_norm = sep_norm
+        self.sep_norm_beta = beta
+
+    def load_phase_sep_image(self):
+
+        sim_dir = self.get_dir_condensation()
+
+        f = np.load(sim_dir / "ph_sep_image_res.npz")
+
+        self.sep_norm = f['sep_norm']
+        self.sep_norm_beta = f['beta']
+
     def condensation_temperature(self, plotflag=False, plot_kwargs={}):
 
         E = self.condensation_energy
         E -= E[0]
 
-        def func(x, a, b, c, d, e):
-            return a*x + d*(0.5 + np.arctan(b*(x-c))/np.pi) + e
-
         xdata = self.beta_pathway
         ydata = E / min(E)
 
-        popt, pcov = scipy.optimize.curve_fit(func, xdata, ydata,
-            p0=(0.0, 3, 3, 0.5, 0),
-            bounds=((-1, 0, 0, -10, -1), (1, 10, 10, 2, 1),))
+        if False:
+            def func(x, a, b, c, d, e, f):
+                return a*(x-f) + d*(0.5 + np.arctan(b*(x-c))/np.pi) + e
 
-        p = " ".join([f"{p:.2f}" for p in popt])
+            popt, pcov = scipy.optimize.curve_fit(func, xdata, ydata,
+                p0=(0.0, 3, 3, 0.5, 0, 0,),
+                bounds=((0, 0, 0, -10, -1, -10), (0.2, 10, 10, 2, 1, 10),))
 
-        inflection_point = popt[2]
-        beta_critical = inflection_point
+            p = " ".join([f"{p:.2f}" for p in popt])
+
+            inflection_point = popt[2]
+            beta_critical = inflection_point
+        else:
+            func = lin_boltzmann_3_level
+            try:
+                popt, pcov = scipy.optimize.curve_fit(func, xdata, ydata,
+                    p0=(0, 0, 0, 1, 1.5, 1.5, 0.1, 0.1),
+                    bounds=((-0.1, 0, 0, 0, 0, 0, 0, 0), (0.1, 0.2, 10, 2, 8, 8, 2, 2),))
+            except RuntimeError as err:
+                popt = (0, 0, 0, 1, 1.5, 1.5, 0.1, 0.1)
+                print(err)
+
+            p = " ".join([f"{p:.2f}" for p in popt])
+
+            inflection_point = min([popt[4], popt[5]])
+            beta_critical = inflection_point
+
+        
 
         if plotflag is True:
             plt.plot(xdata, ydata, **plot_kwargs)
@@ -734,18 +918,40 @@ class LatticePhaseReact():
 
         return beta_critical
 
+# @jit(nopython=True)
+def lin_boltzmann_3_level(x, f0, a, b, c, h1, h2, s1, s2):
+    return f0 + a*(x-b) + c / (1 + 0.5*np.exp(-(x-h1)/s1) + 0.5*np.exp(-(x-h2)/s2))
+
 def sigmoidal_fit(xdata, ydata):
 
-    def func(x, z, a, b, c, d, e):
-        return z + a*x + d*(0.5 + np.arctan(b*(x-c))/np.pi) + e
+    def func(x, a, b, c, d, e, f):
+        return a*(x-f) + d*(0.5 + np.arctan(b*(x-c))/np.pi) + e
 
     popt, pcov = scipy.optimize.curve_fit(func, xdata, ydata,
-        p0=(0.0, 0.0, 3, 3, 0.5, 0),
-        bounds=((0, -1, 0, 0, -10, -1), (0.2, 1, 10, 10, 2, 1),))
+        p0=(0.0, 3, 3, 0.5, 0, 0,),
+        bounds=((0, 0, 0, -10, -1, -10), (0.2, 10, 10, 2, 1, 10),))
 
     inflection_point = popt[3]
     
     return func, popt, inflection_point,
+
+def spline_fit(xdata, ydata):
+    # spl = scipy.interpolate.UnivariateSpline(xdata, ydata, k=5)
+    t = [-1, 0, 1]
+    k = 3
+    spl = scipy.interpolate.make_lsq_spline(xdata, ydata, t, k)
+
+    return spl
+
+def moving_average(x, N=100):
+    
+    X = np.convolve(
+        np.concatenate([np.flip(x[0:N]), x, np.flip(x[-N:-1])]),
+        np.ones(N)/N,
+        mode='same')
+    X = X[N:N+x.size]
+
+    return X
 
 def beta_critical(x):
     # critical beta for binary system
@@ -757,13 +963,23 @@ def beta_critical(x):
 
     return beta_avg
 
-def beta_critical_CW(x):
+def beta_critical_CW(x, k=3):
     # critical beta for binary system
     # using CW mean field
     # x ... volume fraction
-    return 1/4/x/(1-x)
+    return 1/(k+1)/x/(1-x)
 
-def beta_critical_BP():
+def beta_critical_BP_int(xx, **kwargs):
+    X, beta = beta_critical_BP(**kwargs)
+
+    b = np.zeros_like(xx)
+    for i, x in enumerate(xx):
+        ind = np.argmin(np.abs(X - x))
+        b[i] = beta[ind]
+
+    return b
+        
+def beta_critical_BP(k=3, N=100000):
     # critical beta for binary system
     # using BP mean field
     """
@@ -773,12 +989,8 @@ def beta_critical_BP():
     where b = exp(beta) * (1-1/k) + 1 + 1/k
     where k = 3
     """
-    N = 100000
 
     beta_pathway = np.logspace(0, 1, num=N, base=10)
-    # print(beta_pathway)
-
-    k = 3
 
     x = np.full((N,2), np.NaN)
 
@@ -800,8 +1012,6 @@ def beta_critical_BP():
 
             x[i,1] = g / (1 + g)
 
-        # x = w * (w-1) / (w**2 - np.exp(beta))
-
     X = np.concatenate([x[:,0], x[:,1]])
     beta = np.concatenate([beta_pathway, beta_pathway])
 
@@ -815,42 +1025,44 @@ def beta_critical_BP():
 
     return X, beta
 
-colorscale = [
-        # Let first 10% (0.1) of the values have color rgb(0, 0, 0)
-        [0, "rgb(255, 255, 255)"],
-        [0.00001, "rgb(255, 255, 255)"],
+colorscale = "spectral"
 
-        # Let values between 10-20% of the min and max of z
-        # have color rgb(20, 20, 20)
-        [0.00002, "rgb(20, 20, 20)"],
-        [0.1, "rgb(20, 20, 20)"],
+# colorscale = [
+#         # Let first 10% (0.1) of the values have color rgb(0, 0, 0)
+#         [0, "rgb(255, 255, 255)"],
+#         [0.00001, "rgb(255, 255, 255)"],
 
-        # Values between 20-30% of the min and max of z
-        # have color rgb(40, 40, 40)
-        [0.2, "rgb(40, 40, 40)"],
-        [0.3, "rgb(40, 40, 40)"],
+#         # Let values between 10-20% of the min and max of z
+#         # have color rgb(20, 20, 20)
+#         [0.00002, "rgb(20, 20, 20)"],
+#         [0.1, "rgb(20, 20, 20)"],
 
-        [0.3, "rgb(60, 60, 60)"],
-        [0.4, "rgb(60, 60, 60)"],
+#         # Values between 20-30% of the min and max of z
+#         # have color rgb(40, 40, 40)
+#         [0.2, "rgb(40, 40, 40)"],
+#         [0.3, "rgb(40, 40, 40)"],
 
-        [0.4, "rgb(80, 80, 80)"],
-        [0.5, "rgb(80, 80, 80)"],
+#         [0.3, "rgb(60, 60, 60)"],
+#         [0.4, "rgb(60, 60, 60)"],
 
-        [0.5, "rgb(100, 100, 100)"],
-        [0.6, "rgb(100, 100, 100)"],
+#         [0.4, "rgb(80, 80, 80)"],
+#         [0.5, "rgb(80, 80, 80)"],
 
-        [0.6, "rgb(120, 120, 120)"],
-        [0.7, "rgb(120, 120, 120)"],
+#         [0.5, "rgb(100, 100, 100)"],
+#         [0.6, "rgb(100, 100, 100)"],
 
-        [0.7, "rgb(140, 140, 140)"],
-        [0.8, "rgb(140, 140, 140)"],
+#         [0.6, "rgb(120, 120, 120)"],
+#         [0.7, "rgb(120, 120, 120)"],
 
-        [0.8, "rgb(160, 160, 160)"],
-        [0.9, "rgb(160, 160, 160)"],
+#         [0.7, "rgb(140, 140, 140)"],
+#         [0.8, "rgb(140, 140, 140)"],
 
-        [0.9, "rgb(180, 180, 180)"],
-        [1.0, "rgb(180, 180, 180)"]
-    ]
+#         [0.8, "rgb(160, 160, 160)"],
+#         [0.9, "rgb(160, 160, 160)"],
+
+#         [0.9, "rgb(180, 180, 180)"],
+#         [1.0, "rgb(180, 180, 180)"]
+#     ]
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -861,20 +1073,30 @@ def gui(pathway, res, params, params_range):
 
     fig.update_layout(
         autosize=False,
+        plot_bgcolor='#EEE',
         width=800,
+        xaxis_showgrid=False, yaxis_showgrid=False,
         height=800)
+
+    fig['layout']['yaxis']['scaleanchor'] = 'x'
 
     fig.add_trace(
         go.Heatmap(
-            colorbar=dict(len=0.5, y=0.5)
+            colorbar=dict(len=0.5, y=0.5),
         ),
         row=1, col=1)
 
-    fig.add_trace(
-        go.Heatmap(
+    h1 = go.Heatmap(
             colorscale=colorscale,
-            colorbar=dict(len=0.5, y=0.0)),
-        row=1, col=2)
+            colorbar=dict(len=0.5, y=0.0))
+
+    print(h1)
+
+    fig.add_trace(
+        h1, row=1, col=2)
+
+    # fig.update_traces(x={'showgrid':False},
+    #               col=2)
 
     fig.add_trace(
         go.Scatter(),
@@ -917,10 +1139,14 @@ def gui(pathway, res, params, params_range):
             PR = res[i,j]
 
             heat = fig.data[0]
-            heat.z = PR.get_substrate(p['substrate'], t_index)
+            if PR.do_reaction:
+                heat.z = PR.get_substrate(p['substrate'], t_index)
+
 
             heat = fig.data[1]
-            heat.z = PR.get_lattice(t_index)
+            lat = np.asarray(PR.get_lattice(t_index), dtype=np.float)
+            lat[lat == 0] = np.nan
+            heat.z = lat
 
 
             scat = fig.data[2]
