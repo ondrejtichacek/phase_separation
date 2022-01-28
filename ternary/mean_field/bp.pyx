@@ -97,6 +97,8 @@ cdef double core_set(
     double J0m,
     double sx,
     double sy,
+    double dx,
+    double dy,
     double[:] x,
     double[:] y,
     double[:] hx_xy,
@@ -119,9 +121,6 @@ cdef double core_set(
     double nmix,
     double nsep,
     ) nogil:
-
-    cdef double dx = 1e-6
-    cdef double dy = 1e-6
 
     cdef int s = 0
 
@@ -164,31 +163,18 @@ cdef double core_set(
 @cython.wraparound(False)
 @cython.boundscheck(False)
 def bp_main(
-    double lp,
-    double lm,
-    double l0,
-    double Jp,
-    double Jm,
-    double Jpm,
-    double J0,
-    double J0p,
-    double J0m,
-    double sx,
-    double sy,
-    double[:] x,
-    double[:] y,
-    double[:] hx_xy,
-    double[:] hy_xy,
-    double[:] hx_xpy,
-    double[:] hy_xpy,
-    double[:] hx_xyp,
-    double[:] hy_xyp,
-    double[:] mp_,
-    double[:] mm_,
-    double[:] xp_,
-    double[:] xm_,
-    int[:] sep,
-    int[:] sep_exp,
+    double lp, double lm, double l0,
+    double Jp, double Jm, double Jpm,
+    double J0, double J0p, double J0m,
+    double sx, double sy,
+    double dx, double dy,
+    double[:] x, double[:] y,
+    double[:] hx_xy, double[:] hy_xy,
+    double[:] hx_xpy, double[:] hy_xpy,
+    double[:] hx_xyp, double[:] hy_xyp,
+    double[:] mp_, double[:] mm_,
+    double[:] xp_, double[:] xm_,
+    int[:] sep, int[:] sep_exp,
     double[:] sep_exp_cont,
     int use_continuous_err,
     int[:] is_on_boundary,
@@ -200,7 +186,7 @@ def bp_main(
 
     return core_set(
         lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m,
-        sx, sy, x, y, hx_xy, hy_xy, hx_xpy,
+        sx, sy, dx, dy, x, y, hx_xy, hy_xy, hx_xpy,
         hy_xpy, hx_xyp, hy_xyp,
         mp_, mm_, xp_, xm_,
         sep, sep_exp, sep_exp_cont, use_continuous_err,

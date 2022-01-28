@@ -60,10 +60,10 @@ int bp_set(
 
     const double tol = 1e-8;
 
-    // const bool warm_start = true;
-    const bool warm_start = false;
+    const bool warm_start = true;
+    // const bool warm_start = false;
 
-    // int it = 0;
+    int it = 0;
     int k = 0;
 
     double l0expJ0 = l0 * exp(J0);
@@ -122,10 +122,13 @@ int bp_set(
                 k++;
 
                 if (k > 1000000)
+                {
+                    cout << "fail at: " << cm << " " << cp << endl;
                     return 1;
+                }
 
             } while (fabs(fp) + fabs(fm) > tol);
-
+            //cout << k << endl;
             if (warm_start)
             {
                 mp_[i] = mp + fp * dt;
@@ -156,7 +159,7 @@ int bp_set(
 
             do
             {
-                // it++;
+                it++;
 
                 // fp = xp - log((exp(Jp + mp - xp) + exp(Jpm + mm - xm) + 1.) / (exp(mp - xp) + exp(mm - xm) + 1.));
                 // fm = xm - log((exp(Jpm + mp - xp) + exp(Jm + mm - xm) + 1.) / (exp(mp - xp) + exp(mm - xm) + 1.));
@@ -178,10 +181,13 @@ int bp_set(
                 k++;
 
                 if (k > 1000000)
+                {
+                    cout << "fail at: " << cm << " " << cp << endl;
                     return 1;
+                }
 
             } while (fabs(fp) + fabs(fm) > tol);
-
+            // cout << k << endl;
             if (warm_start)
             {
                 xp_[i] = xp + fp * dt;
@@ -198,8 +204,8 @@ int bp_set(
             hY[i] = hp;
         }
     }
+    //cout << "#" << it << endl;
     return 0;
-    // cout << "#" << it << endl;
 }
 
 int hess_set(

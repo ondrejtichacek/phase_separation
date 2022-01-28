@@ -3,6 +3,8 @@ from scipy.optimize import differential_evolution, dual_annealing
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.patches import Patch
 
 import numpy as np
 import subprocess
@@ -33,6 +35,10 @@ class Optimizer():
 
         self.logfile = f"log_{self.sel}.txt"
 
+        # volume fractions dx and dy used for numerical calculations
+        self.dx = 1e-6
+        self.dy = 1e-6
+
         print(self.sel)
 
     def load_mock_data(self, fname):
@@ -44,7 +50,7 @@ class Optimizer():
         sep = data[:,2]
         sep_cont = (1 + data[:,3]) / 2
 
-        ind = ((x + y) < 1) & (x > 0) & (y > 0)
+        ind = ((x + 10*self.dx + y) < 1) & ((x + y + 10*self.dy) < 1) & (x > 0) & (y > 0)
 
         x = x[ind]
         y = y[ind]
@@ -77,7 +83,63 @@ class Optimizer():
             else:
                 is_on_boundary[i] = 0
 
-        is_on_boundary = np.zeros_like(is_on_boundary)
+        # is_on_boundary = np.zeros_like(is_on_boundary)
+
+        self.is_on_boundary = is_on_boundary
+
+    def load_exp_data_new(self, fname):
+
+        data = np.loadtxt(fname)
+
+        x = data[:,0]
+        y = data[:,1]
+
+        self.orig_x = np.copy(x)#/10)
+        self.orig_y = np.copy(y)#/10)
+        
+        sep_cont = data[:,2]
+        sep = sep_cont >= 0.5
+
+        x /= x.max() * 2.01
+        y /= y.max() * 2.01
+
+        # ind = ((x + 10*self.dx + y) < 1) & ((x + y + 10*self.dy) < 1) & (x > 0) & (y > 0)
+
+        # print(x)
+        # print(ind)
+
+        # x = x[ind]
+        # y = y[ind]
+
+        # sep = sep[ind]
+
+        self.x = np.ascontiguousarray(x, dtype=np.double)
+        self.y = np.ascontiguousarray(y, dtype=np.double)
+        self.sep = np.ascontiguousarray(sep, dtype=np.int32)
+        self.sep_cont = np.ascontiguousarray(sep_cont, dtype=np.double)
+
+        n = self.x.size
+
+        min_x = np.min(self.x)
+        min_y = np.min(self.y)
+        max_x = np.max(self.x)
+        max_y = np.max(self.y)
+
+        tolx = 1e-5
+        toly = 1e-5
+
+        is_on_boundary = np.zeros(n, dtype=np.int32)
+
+        for i in range(n):
+            if ((self.x[i] < min_x + tolx)
+                or (self.x[i] > max_x - tolx)
+                or (self.y[i] < min_y + toly)
+                or (self.y[i] > max_y - toly)):
+                is_on_boundary[i] = 1
+            else:
+                is_on_boundary[i] = 0
+
+        # is_on_boundary = np.zeros_like(is_on_boundary)
 
         self.is_on_boundary = is_on_boundary
 
@@ -113,7 +175,7 @@ class Optimizer():
         x *= self.vol_frac_scaling_x
         y *= self.vol_frac_scaling_y
 
-        ind = ((x + y) < 1) & (x > 0) & (y > 0)
+        ind = ((x + 10*self.dx + y) < 1) & ((x + y + 10*self.dy) < 1) & (x > 0) & (y > 0)
 
         x = x[ind]
         y = y[ind]
@@ -137,7 +199,7 @@ class Optimizer():
         self.x = np.ascontiguousarray(x, dtype=np.double)
         self.y = np.ascontiguousarray(y, dtype=np.double)
         self.sep = np.ascontiguousarray(sep, dtype=np.int32)
-
+        self.sep_cont = np.ascontiguousarray(sep, dtype=np.double)
         n = self.x.size
 
         min_x = np.min(self.x)
@@ -166,10 +228,19 @@ class Optimizer():
         # plt.plot(self.x[self.is_on_boundary == 1], self.y[self.is_on_boundary == 1], 'x')
         # plt.show()
 
+    def assert_volume_fractions(self, x, y):
+        all_good = np.all(
+            ((x + 10*self.dx + y) < 1)  & ((x + y + 10*self.dy) < 1)
+             & (x > 0) & (y > 0))
+        assert(all_good)
+
     def optimize_cy(self, params, maxiter=1):
 
         x = self.x
         y = self.y
+
+        self.assert_volume_fractions(x, y)
+
         sep_exp = self.sep
 
         num_mix = np.count_nonzero(sep_exp == 0)
@@ -203,7 +274,7 @@ class Optimizer():
         sep_exp_cont = np.ascontiguousarray(self.sep_cont, dtype=t_double)
         is_on_boundary = np.ascontiguousarray(self.is_on_boundary, dtype=t_bool)
 
-        print(use_cont_err)
+        print(f"using cont. error {use_cont_err}")
 
         args = [
             x, y,
@@ -279,6 +350,7 @@ class Optimizer():
         cost = bp_main(
             lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m,
             scale_x, scale_y,
+            self.dx, self.dy,
             x, y,
             hx_xy, hy_xy,
             hx_xpy, hy_xpy,
@@ -307,6 +379,58 @@ class Optimizer():
     def bp_wrapper(self, x, y, lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m,
             sep_exp=None, sep_exp_cont=None, is_on_boundary=None):
 
+        self.assert_volume_fractions(x, y)
+
+        n = x.size
+
+        # memory
+        hx_xy = np.zeros(n)
+        hy_xy = np.zeros(n)
+        hx_xpy = np.zeros(n)
+        hy_xpy = np.zeros(n)
+        hx_xyp = np.zeros(n)
+        hy_xyp = np.zeros(n)
+        mp = np.zeros(n)
+        mm = np.zeros(n)
+        xp = np.zeros(n)
+        xm = np.zeros(n)
+
+        print(f"using cont. error {self.use_cont_err}")
+
+        # dummy data
+        if sep_exp is None:
+            sep_exp = np.ones(n, dtype=np.int32)
+        if sep_exp_cont is None:
+            sep_exp_cont = np.ones(n, dtype=np.double)
+        if is_on_boundary is None:
+            is_on_boundary = np.zeros(n, dtype=np.int32)
+
+        # return array
+        sep = np.ones(n, dtype=np.int32)
+
+        is_on_boundary = np.ascontiguousarray(is_on_boundary)
+
+        err = bp_main(
+            lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, 
+            1, 1,
+            self.dx, self.dy,
+            x, y,
+            hx_xy, hy_xy,
+            hx_xpy, hy_xpy,
+            hx_xyp, hy_xyp,
+            mp, mm, xp, xm,
+            sep, sep_exp, sep_exp_cont, self.use_cont_err,
+            is_on_boundary, self.lattice_connectivity, n, 1, 1,
+        )
+
+        return err, sep
+
+    @timer
+    def bp_test_speed(self, x, y, lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m,
+            sep_exp=None, sep_exp_cont=None, is_on_boundary=None, calculate=True):
+
+        self.assert_volume_fractions(x, y)
+
         n = x.size
 
         # memory
@@ -334,16 +458,74 @@ class Optimizer():
 
         is_on_boundary = np.ascontiguousarray(is_on_boundary)
 
-        err = bp_main(
-            lp, lm, l0, Jp, Jm, Jpm, J0, J0p, J0m, 
-            1, 1, 
-            x, y,
-            hx_xy, hy_xy,
-            hx_xpy, hy_xpy,
-            hx_xyp, hy_xyp,
-            mp, mm, xp, xm,
-            sep, sep_exp, sep_exp_cont, self.use_cont_err,
-            is_on_boundary, self.lattice_connectivity, n, 1, 1,
-        )
+        for i in np.arange(100):
+            p = [lp + np.random.uniform(0,10),
+                lm + np.random.uniform(0,10),
+                l0 + np.random.uniform(0,10),
+                Jp + np.random.uniform(-5,5),
+                Jm + np.random.uniform(-5,5),
+                Jpm + np.random.uniform(-5,5),
+                J0 + np.random.uniform(-5,5),
+                J0p + np.random.uniform(-5,5),
+                J0m + np.random.uniform(-5,5)]
+
+            if calculate:
+                err = bp_main(
+                    *p,
+                    1, 1,
+                    self.dx, self.dy,
+                    x, y,
+                    hx_xy, hy_xy,
+                    hx_xpy, hy_xpy,
+                    hx_xyp, hy_xyp,
+                    mp, mm, xp, xm,
+                    sep, sep_exp, sep_exp_cont, self.use_cont_err,
+                    is_on_boundary, self.lattice_connectivity, n, 1, 1,
+                )
+            else:
+                err = 0
 
         return err, sep
+
+    def plot_phase_diagram(self, X, Y, Z):
+        ZZ = np.copy(Z)
+        ZZ[ZZ == -1] = np.nan
+
+        hfig = plt.figure(figsize=(3,3))
+
+        # colors = ['#CCC', 'crimson']
+        # colors = ['#CCC', 'purple']
+        colors = ['#CCC', 'blue']
+        # colors = ['#CCC', 'green']
+        ax = plt.gca()
+        
+        ax.pcolormesh(ZZ, #X, Y, ZZ, 
+            #edgecolors='w', linewidth=0.1, 
+            cmap=LinearSegmentedColormap.from_list('', colors))
+        
+        plt.xticks([0,ZZ.shape[0]], labels=[0,f"{X.flatten().max():.2f}"])
+        plt.yticks([0,ZZ.shape[1]], labels=[0,f"{Y.flatten().max():.2f}"])
+
+        ax.set_aspect('equal')
+        legend_elements = [Patch(facecolor=color, edgecolor='w') for color in colors]
+        
+        ax.legend(handles=legend_elements,
+                labels=[f"mixed", f"separated"])
+        plt.xlabel('vol. frac. #1')
+        plt.ylabel('vol. frac. #2')
+        plt.tight_layout(pad=2)
+
+        return hfig
+
+    def CW_set(self, CP, CM, Jp, Jm, Jpm):
+
+        sep = np.ones_like(CP)
+
+        for i, (cp, cm) in enumerate(zip(CP, CM)):
+            inv = 1 / (1 - cp - cm)
+            tr = -2*(Jp + Jm) + 1/cp +1/cm + 2*inv
+            det = (-2*Jp + 1/cp + inv) * (-2*Jm + 1/cm + inv) - (-Jpm + inv)*(-Jpm + inv)
+            if (tr > 0 and det > 0):
+                sep[i] = 0
+
+        return sep

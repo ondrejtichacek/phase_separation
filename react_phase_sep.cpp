@@ -138,67 +138,6 @@ for (int i = 0; i < L; i++)              // rows
 }
 }
 
-
-void init_interaction()
-{
-    // initialization: filling interaction matrix
-
-    // interaction matrix
-    for (int i = 0; i <= q; i++)
-    {
-        I[0][i] = 0;
-        I[i][0] = 0; // interaction with solute (=0 default)
-    }
-
-    for (int i = 1; i <= q; i++)
-        for (int j = 1; j <= q; j++)
-            I[i][j] = 2 * (1 - casual());
-
-    for (int i = 1; i <= q; i++)
-        for (int j = i; j <= q; j++)
-            I[i][j] = 2 - casual();
-
-    for (int i = 1; i <= q; i++)
-        for (int j = i; j >= 1; j--)
-            I[i][j] = 1 - casual();
-
-    for (int i = 1; i <= q; i++)
-    {
-        for (int j = i; j <= q; j++)
-        {
-            if (i == j)
-                I[i][j] = 0;
-            if (i + 1 == j)
-                I[i][j] = 2;
-            //if (i - 1 == j)
-            //    I[i][j] = 2;
-        }
-    }
-
-    // interaction matrix
-    for (int i = 0; i <= q; i++)
-        J[0][i] = J[i][0] = 0; // interaction with solute (=0 default)
-
-    for (int i = 1; i <= q; i++)
-    {
-        for (int j = i; j <= q; j++)
-        {
-            //double d = 2 - (j - i) / q;
-            //J[i][j]=  2*(0.5-random(1));
-            if (i == j)
-                J[i][j] = 1; // self interaction  (=1 default)
-            //else if (j - i <= 4)
-            //    J[i][j] = 1.5;
-            else if (j >= i + 1)
-                // J[i][j] = 1; // cross interactions (=1 default)
-                J[i][j] = 2 * (1 - casual());
-            // J[i][j] = d;
-            // J[i][j] = 0;
-            J[j][i] = J[i][j];
-        }
-    }
-}
-
 void init_lattice(const double conc)
 {
     // initialization: filling lattice variable (uniform volume fraction)
@@ -711,7 +650,7 @@ double sweep(
 {    
     double energy_change = 0;
 
-    double scale = 100;
+    double scale = 1000;
 
     // --------------------------------------------------------------
     // diffusion of substrate #0 from the bulk to the membrane
@@ -800,7 +739,7 @@ int time_to_react(const double F, const double interaction, const int react_coun
 {
     /* simulating a substrate entering and reacting,
     it returns the total time to go through the pathway,
-    F is the attraction energy of the substrate with the enzymes (uniform) */
+    F is the attraction energy of the substrate with the enzymes */
     int counter = 0;
     
     int pos[2];
@@ -852,28 +791,17 @@ int time_to_react(const double F, const double interaction, const int react_coun
         else if (newpos[1] >= L)
             newpos[1] = 0;
 
-        int okkei = 1;
+        bool accept = false;
 
         if (INTERACTION_WALK == true)
         {
-            okkei = 0;
-
-            int i1 = counter;
             int j1 = spin[pos[0]][pos[1]];
-            int i2 = counter;
             int j2 = spin[newpos[0]][newpos[1]];
-            double T1 = I[i1][j1] - I[i2][j2];
+            
+            double II = I[counter][j1] - I[counter][j2];
 
-            if (T1 < 0)
-            {
-                okkei = 1;
-            }
-            else
-            {
-                // if (cas < 1. / exp(2 * T1 * interaction))
-                if (casual() < 1. / exp(T1 * F / 2))
-                    okkei = 1;
-            }
+            if ((II < 0) || (casual() < exp(-II * F)))
+                accept = true;
         }
         else
         {
@@ -883,17 +811,128 @@ int time_to_react(const double F, const double interaction, const int react_coun
             // if (spin[newpos[0]][newpos[1]] > 0 && spin[newpos[0]][newpos[1]] != counter + 1)
             {
                 // decide whether to accept step
-                okkei = 0;
                 if (casual() < 1. / exp(F))
-                    okkei = 1;
+                    accept = true;
             }
         }
 
-        if (okkei == 1)
+        if (accept)
         {
             pos[0] = newpos[0];
             pos[1] = newpos[1];
         }
+
+        tempo++;
+
+    } while (counter < q); // q is the chain length
+    return tempo;
+}
+
+double dEnergyReact(
+    const int s, 
+    const int i, const int j,
+    const int im, const int jm,
+    const int ip, const int jp)
+{
+    return (J[s][spin[i][jm]]   // down interaction
+          + J[s][spin[i][jp]]   // up
+          + J[s][spin[im][j]]   // left
+          + J[s][spin[ip][j]]); // right
+}
+
+int rand_p(const double x[5], const double z)
+{
+    // cumulative probability
+    double P_cum = 0.0;
+
+    // random number
+    double cas = casual();
+
+    for (int k = 0; k < 5; k++){
+        double P = x[k] / z;
+        P_cum += P;
+        if (cas < P_cum)
+        {
+            return k;
+        }
+    }
+    return -1;
+}
+
+int time_to_react_new(const double beta, const double interaction, const int react_counter)
+{
+    /* simulating a substrate entering and reacting,
+    it returns the total time to go through the pathway,
+    F is the attraction energy of the substrate with the enzymes (uniform) */
+    int counter = 0;
+    
+    int pos[2];
+    int newpos[2];
+
+    int tempo = 0;
+
+    double delta[5];
+    double P[5];
+    double X[5];
+
+    int x[5];
+    int y[5];
+
+    pos[0] = int(casual() * L);
+    pos[1] = int(casual() * L);
+
+    do
+    {
+        // l_react[pos[0]][pos[1]][counter] += 1;
+
+        if (spin[pos[0]][pos[1]] == counter + 1)
+        {
+            counter++;
+        }
+
+        x[0] = pos[0];
+        y[0] = pos[1];
+
+        x[1] = x[0];
+        y[1] = (y[0] + 1) % L;
+        
+        x[2] = x[0];
+        y[2] = (L + y[0] - 1) % L;
+
+        x[3] = (x[0] + 1) % L;
+        y[3] = y[0];
+
+        x[4] = (L + x[0] - 1) % L;
+        y[4] = y[0];
+
+        int s0 = spin[x[0]][y[0]];
+        int s1 = spin[x[1]][y[1]];
+        int s2 = spin[x[2]][y[2]];
+        int s3 = spin[x[3]][y[3]];
+        int s4 = spin[x[4]][y[4]];
+
+        double F[5];
+        F[0] = I[counter][s0];
+        F[1] = I[counter][s1];
+        F[2] = I[counter][s2];
+        F[3] = I[counter][s3];
+        F[4] = I[counter][s4];
+
+        // z ... partition sum
+        double z = 0.0;
+
+        for (int k = 0; k < 5; k++){
+
+            delta[k] = -F[k];
+
+            X[k] = exp(-beta * delta[k]);
+            z += X[k];
+        }
+        
+        int k = rand_p(X, z);
+
+        pos[0] = x[k];
+        pos[1] = y[k];
 
         tempo++;
 
@@ -1214,18 +1253,7 @@ int core(
     init_lattice(volume_frac);
     init_diffusion_kernel();
 
-    bool load_interaction_from_file = true;
-
-    if (load_interaction_from_file)
-    {
-        load_interaction();
-        // save_interaction();
-    }
-    else
-    {
-        init_interaction();
-        save_interaction();
-    }
+    load_interaction();
 
     vector<double> alpha;
     vector<double> beta;
